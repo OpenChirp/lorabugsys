@@ -8,3 +8,4 @@ To make use of them, you must add this overrides directory to the includes list 
 const uint_least8_t ADCBuf_count = CC2650_LAUNCHXL_ADCBufCOUNT;
 const uint_least8_t ADC_count = CC2650_LAUNCHXL_ADCCOUNT;
 ```
+They were merged from `tirtos_cc13xx_cc26xx_2_21_00_06`.
