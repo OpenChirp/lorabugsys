@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,7 +64,7 @@
  * directly from the CM3 without going through the sensor controller.
  * The sensor controller can still use the ADC, support for sharing the ADC resource between the
  * sensor controller and the CM3 is built into the driver. There is a hardware semaphore that the
- * driver must aqcuire before beginning any number of conversions. This same hardware semaphore also
+ * driver must acquire before beginning any number of conversions. This same hardware semaphore also
  * prevents the simultaneous use of this driver and the basic ADC driver.
  *
  * The ADC drivers supports making between one and 1024 measurements once or continuous
@@ -80,8 +80,13 @@
  *
  * In order to perform an ADC conversion, the application should call
  * ADCBuf_convert(). This call will request the ADC resource, configure the ADC, set up the DMA and GPTimer,
- * and perform the requested ADC conversions on the selected DIO or internal signal. The DIO or interrnal signal is defined by the
+ * and perform the requested ADC conversions on the selected DIO or internal signal. The DIO or internal signal is defined by the
  * ADCBuf_Conversion structure in the application code and adcBufCC26xxObjects in the board file.
+ *
+ * @warning If the ADCBUF driver is setup in ADCBuf_RECURRENCE_MODE_CONTINUOUS mode, the user must assure that the provided callback
+ *          function is completed before the next conversion completes. If the next conversion completes before the callback function finishes,
+ *          the DMA will clobber the previous buffer with new data.
+ *
  * If the sensor controller is using the ADC when the driver requests it at the start of the ADC_convert() call,
  * the conversion will fail and return false.
  * The ADC resource may be pre-acquired by calling the control function ADCBufCC26XX_CMD_ACQUIRE_ADC_SEMAPHORE.
@@ -108,8 +113,8 @@
  * | 6      | No                            | No                            | No                            | No                            | ADC_COMPB_IN_AUXIO6           | ADC_COMPB_IN_AUXIO6
  * | 7      | No                            | No                            | ADC_COMPB_IN_AUXIO7           | ADC_COMPB_IN_AUXIO7           | ADC_COMPB_IN_AUXIO5           | ADC_COMPB_IN_AUXIO5
  * | 8      | No                            | No                            | ADC_COMPB_IN_AUXIO6           | ADC_COMPB_IN_AUXIO6           | ADC_COMPB_IN_AUXIO4           | ADC_COMPB_IN_AUXIO4
- * | 9      | No                            | No                            | ADC_COMPB_IN_AUXIO5           | ADC_COMPB_IN_AUXIO5           | ADC_COMPB_IN_AUXIO3           | ADC_COMPB_IN_AUXIO3
- * | 10     | No                            | No                            | ADC_COMPB_IN_AUXIO4           | ADC_COMPB_IN_AUXIO4           | No                            | No
+ * | 9      | No                            | No                            | ADC_COMPB_IN_AUXIO4           | ADC_COMPB_IN_AUXIO4           | ADC_COMPB_IN_AUXIO3           | ADC_COMPB_IN_AUXIO3
+ * | 10     | No                            | No                            | ADC_COMPB_IN_AUXIO5           | ADC_COMPB_IN_AUXIO5           | No                            | No
  * | 11     | No                            | No                            | ADC_COMPB_IN_AUXIO3           | ADC_COMPB_IN_AUXIO3           | No                            | No
  * | 12     | No                            | No                            | ADC_COMPB_IN_AUXIO2           | ADC_COMPB_IN_AUXIO2           | No                            | No
  * | 13     | No                            | No                            | ADC_COMPB_IN_AUXIO1           | ADC_COMPB_IN_AUXIO1           | No                            | No
@@ -175,7 +180,9 @@
  *
  *
  *  # Not Supported Functionality #
- *  TBD
+ *     - Performing conversions on multiple channels simultaneously is not supported.
+ *       In other words, the parameter channelCount must always be set to 1 when calling ADCBuf_convert().
+ *       The ADC on CC26XX devices does not support time-division multiplexing of channels or pins in hardware.
  *
  * # Use Cases #
  * ## Basic one-shot conversion #
@@ -183,7 +190,7 @@
  *  @code
  *      #include <ti/drivers/ADCBuf.h>
  *
- *      #define ADCBUFFERSIZE	100
+ *      #define ADCBUFFERSIZE   100
  *
  *      ADCBuf_Handle adcBufHandle;
  *      ADCBuf_Params adcBufParams;
@@ -192,6 +199,9 @@
  *
  *      ADCBuf_Params_init(&adcBufParams);
  *      adcBufHandle = ADCBuf_open(Board_ADCBuf0, &adcBufParams);
+ *      if (adcBufHandle == NULL) {
+ *          // handle error
+ *      }
  *
  *      blockingConversion.arg = NULL;
  *      blockingConversion.adcChannel = Board_ADCCHANNEL_A1;
@@ -199,19 +209,49 @@
  *      blockingConversion.sampleBufferTwo = NULL;
  *      blockingConversion.samplesRequestedCount = ADCBUFFERSIZE;
  *
- *      if (adcBufHandle) {
- *          if (!ADCBuf_convert(adcBuf, &blockingConversion, 1)) {
- *              // handle error
- *          }
- *          else {
- *              ADCBuf_close(adcBufHandle);
- *          }
- *      }
- *      else {
+ *      if (ADCBuf_convert(adcBufHandle, &blockingConversion, 1) != ADCBuf_STATUS_SUCCESS) {
  *          // handle error
  *      }
  *  @endcode
  *
+ * ## Using ADCBufCC26XX_ParamsExtension #
+ *  This specific configuration performs one conversion on Board_ADCCHANNEL_A1 in ::ADCBuf_RETURN_MODE_BLOCKING.
+ *  The custom parameters used here are identical to the defaults parameters.
+ *  Users can of course define their own parameters.
+ *  @code
+ *      #include <ti/drivers/ADCBuf.h>
+ *
+ *      #define ADCBUFFERSIZE   100
+ *
+ *      ADCBuf_Handle adcBufHandle;
+ *      ADCBuf_Params adcBufParams;
+ *      ADCBuf_Conversion blockingConversion;
+ *      uint16_t sampleBufferOne[ADCBUFFERSIZE];
+ *      ADCBufCC26XX_ParamsExtension customParams;
+ *
+ *      ADCBuf_Params_init(&adcBufParams);
+ *      customParams.samplingDuration    = ADCBufCC26XX_SAMPLING_DURATION_2P7_US;
+ *      customParams.refSource           = ADCBufCC26XX_FIXED_REFERENCE;
+ *      customParams.samplingMode        = ADCBufCC26XX_SAMPING_MODE_SYNCHRONOUS;
+ *      customParams.inputScalingEnabled = true;
+ *
+ *      adcBufParams.custom = &customParams;
+ *
+ *      adcBufHandle = ADCBuf_open(Board_ADCBuf0, &adcBufParams);
+ *      if (adcBufHandle == NULL) {
+ *          // handle error
+ *      }
+ *
+ *      blockingConversion.arg = NULL;
+ *      blockingConversion.adcChannel = Board_ADCCHANNEL_A1;
+ *      blockingConversion.sampleBuffer = sampleBufferOne;
+ *      blockingConversion.sampleBufferTwo = NULL;
+ *      blockingConversion.samplesRequestedCount = ADCBUFFERSIZE;
+ *
+ *      if (ADCBuf_convert(adcBufHandle, &blockingConversion, 1) != ADCBuf_STATUS_SUCCESS) {
+ *          // handle error
+ *      }
+ *  @endcode
  *
  *  # Instrumentation #
  *  The ADC driver interface produces log statements if instrumentation is
@@ -526,6 +566,7 @@ typedef struct ADCBufCC26XX_Object{
     ADCBuf_Callback                 callbackFxn;                /*!< Pointer to callback function */
     ADCBuf_Recurrence_Mode          recurrenceMode;             /*!< Should we convert continuously or one-shot */
     ADCBuf_Return_Mode              returnMode;                 /*!< Mode for all conversions */
+    uint16_t                        *activeSampleBuffer;        /*!< The last complete sample buffer used by the DMA */
 
     /* ADC SYS/BIOS objects */
     Hwi_Struct                      hwi;                        /*!< Hwi object */

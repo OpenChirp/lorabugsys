@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Texas Instruments Incorporated
+ * Copyright (c) 2016-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -73,7 +73,7 @@ void ADCCC26XX_init(ADC_Handle handle);
 ADC_Handle ADCCC26XX_open(ADC_Handle handle, ADC_Params *params);
 int_fast16_t ADCCC26XX_convert(ADC_Handle handle, uint16_t *value);
 int_fast16_t ADCCC26XX_control(ADC_Handle handle, uint_fast16_t cmd, void *arg);
-uint32_t ADCCC26XX_convertRawToMicroVolts(ADC_Handle handle, uint16_t rawAdcValue);
+uint32_t ADCCC26XX_convertToMicroVolts(ADC_Handle handle, uint16_t adcValue);
 
 /*
  * =============================================================================
@@ -92,7 +92,7 @@ const ADC_FxnTable ADCCC26XX_fxnTable = {
     ADCCC26XX_close,
     ADCCC26XX_control,
     ADCCC26XX_convert,
-    ADCCC26XX_convertRawToMicroVolts,
+    ADCCC26XX_convertToMicroVolts,
     ADCCC26XX_init,
     ADCCC26XX_open
 };
@@ -108,8 +108,6 @@ static uint16_t adcInstance = 0;
 
 /* Semaphore to arbitrate access to the single ADC peripheral between multiple handles */
 static Semaphore_Struct adcSemaphore;
-
-
 
 /*
  * =============================================================================
@@ -127,12 +125,12 @@ void ADCCC26XX_close(ADC_Handle handle){
 
     object = handle->object;
 
-
     uint32_t key = Hwi_disable();
-    if (object->isOpen){
+
+    if (object->isOpen) {
         adcInstance--;
         if (adcInstance == 0) {
-                Semaphore_destruct(&adcSemaphore);
+            Semaphore_destruct(&adcSemaphore);
         }
         Log_print0(Diags_USER1,"ADC: Object closed");
     }
@@ -161,24 +159,39 @@ int_fast16_t ADCCC26XX_control(ADC_Handle handle, uint_fast16_t cmd, void *arg){
  *  ======== ADCCC26XX_convert ========
  */
 int_fast16_t ADCCC26XX_convert(ADC_Handle handle, uint16_t *value){
-    ADCCC26XX_HWAttrs     const *hwAttrs;
-    int_fast16_t                conversionResult = ADC_STATUS_ERROR;
+    ADCCC26XX_HWAttrs   const *hwAttrs;
+    ADCCC26XX_Object    *object;
+    int_fast16_t        conversionResult = ADC_STATUS_ERROR;
+    uint16_t            conversionValue = 0;
+    uint32_t            interruptStatus = 0;
 
     Assert_isTrue(handle, NULL);
 
     /* Get handle */
     hwAttrs = handle->hwAttrs;
 
-    /* Acquire the lock for this particular ADC handle */
-    Semaphore_pend(Semaphore_handle(&adcSemaphore), BIOS_WAIT_FOREVER);
+    /* Get the object */
+    object = handle->object;
+
+    if (object->isProtected) {
+        /* Acquire the lock for this particular ADC handle */
+        Semaphore_pend(Semaphore_handle(&adcSemaphore), BIOS_WAIT_FOREVER);
+    }
 
     /* Set constraints to guarantee operation */
     Power_setConstraint(PowerCC26XX_SB_DISALLOW);
 
-    /* Acquire the ADC hw semaphore. This call polls until the semaphore is available */
+    /* Acquire the ADC hw semaphore. Return an error if the hw semaphore is not
+     * available. There is only one interrupt available for the hw semaphores and it
+     * is used by the TDC already. Busy-wait polling might lock up the device and starting
+     * timeout clocks would add overhead and be clunky. It is better if such functionality
+     * is implemented at application level if desired.
+     */
     if(!AUXSMPHTryAcquire(AUX_SMPH_2)){
         Power_releaseConstraint(PowerCC26XX_SB_DISALLOW);
-        Semaphore_post(Semaphore_handle(&adcSemaphore));
+        if (object->isProtected) {
+            Semaphore_post(Semaphore_handle(&adcSemaphore));
+        }
         return conversionResult;
     }
 
@@ -200,7 +213,24 @@ int_fast16_t ADCCC26XX_convert(ADC_Handle handle, uint16_t *value){
     AUXADCGenManualTrigger();
 
     /* Poll until the sample is ready */
-    *value = AUXADCReadFifo();
+    conversionValue = AUXADCReadFifo();
+
+    /* Get the status of the ADC_IRQ line and ADC_DONE.
+     * Despite not using the interrupt line, we need to clear it so that the
+     * ADCBuf driver does not call Hwi_construct and have thte interrupt fire
+     * immediately.
+     */
+    interruptStatus = HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGS) &
+                        (AUX_EVCTL_EVTOMCUFLAGS_ADC_IRQ |
+                         AUX_EVCTL_EVTOMCUFLAGS_ADC_DONE);
+
+    /* Clear the ADC_IRQ flag in AUX_EVTCTL */
+    HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) = interruptStatus;
+
+    /* Clear the ADC_IRQ within the NVIC as AUX_EVTCTL will only set the
+     * relevant flag in the NVIC it will not clear it.
+     */
+    Hwi_clearInterrupt(INT_AUX_ADC_IRQ);
 
     conversionResult = ADC_STATUS_SUCCESS;
 
@@ -213,8 +243,19 @@ int_fast16_t ADCCC26XX_convert(ADC_Handle handle, uint16_t *value){
     /* Allow entering standby again after ADC conversion complete */
     Power_releaseConstraint(PowerCC26XX_SB_DISALLOW);
 
-    /* Release the lock for this particular ADC handle */
-    Semaphore_post(Semaphore_handle(&adcSemaphore));
+    if (object->isProtected) {
+        /* Release the lock for this particular ADC handle */
+        Semaphore_post(Semaphore_handle(&adcSemaphore));
+    }
+
+    /* If we want to return the trimmed value, calculate it here. */
+    if (hwAttrs->returnAdjustedVal) {
+        uint32_t gain = AUXADCGetAdjustmentGain(hwAttrs->refSource);
+        uint32_t offset = AUXADCGetAdjustmentOffset(hwAttrs->refSource);
+        conversionValue = AUXADCAdjustValueForGainAndOffset(conversionValue, gain, offset);
+    }
+
+    *value = conversionValue;
 
     /* Return the number of bytes transfered by the ADC */
     return conversionResult;
@@ -224,10 +265,8 @@ int_fast16_t ADCCC26XX_convert(ADC_Handle handle, uint16_t *value){
 /*
  *  ======== ADCCC26XX_convertRawToMicroVolts ========
  */
-uint32_t ADCCC26XX_convertRawToMicroVolts(ADC_Handle handle, uint16_t rawAdcValue){
+uint32_t ADCCC26XX_convertToMicroVolts(ADC_Handle handle, uint16_t adcValue){
     ADCCC26XX_HWAttrs     const *hwAttrs;
-    uint32_t                    gain;
-    uint32_t                    offset;
     uint32_t                    adjustedValue;
 
     Assert_isTrue(handle, NULL);
@@ -235,9 +274,15 @@ uint32_t ADCCC26XX_convertRawToMicroVolts(ADC_Handle handle, uint16_t rawAdcValu
     /* Get the pointer to the hwAttrs */
     hwAttrs = handle->hwAttrs;
 
-    gain = AUXADCGetAdjustmentGain(hwAttrs->refSource);
-    offset = AUXADCGetAdjustmentOffset(hwAttrs->refSource);
-    adjustedValue = AUXADCAdjustValueForGainAndOffset(rawAdcValue, gain, offset);
+    /* Only apply trim if specified*/
+    if (hwAttrs->returnAdjustedVal) {
+        adjustedValue = adcValue;
+    }
+    else {
+        uint32_t gain = AUXADCGetAdjustmentGain(hwAttrs->refSource);
+        uint32_t offset = AUXADCGetAdjustmentOffset(hwAttrs->refSource);
+        adjustedValue = AUXADCAdjustValueForGainAndOffset(adcValue, gain, offset);
+    }
 
     return AUXADCValueToMicrovolts((hwAttrs->inputScalingEnabled ? AUXADC_FIXED_REF_VOLTAGE_NORMAL : AUXADC_FIXED_REF_VOLTAGE_UNSCALED), adjustedValue);
 }
@@ -280,8 +325,11 @@ ADC_Handle ADCCC26XX_open(ADC_Handle handle, ADC_Params *params){
     }
     object->isOpen = true;
 
+    /* remember thread safety protection setting */
+    object->isProtected = params->isProtected;
+
     /* If this is the first handle requested, set up the semaphore as well */
-    if (adcInstance == 0){
+    if (adcInstance == 0) {
         /* Setup semaphore */
         Semaphore_Params_init(&semParams);
         semParams.mode = Semaphore_Mode_BINARY;
@@ -297,8 +345,15 @@ ADC_Handle ADCCC26XX_open(ADC_Handle handle, ADC_Params *params){
 
     /* Reserve the DIO defined in the hwAttrs */
     uint8_t i = 0;
+
     /* Add pin to measure on */
-    adcPinTable[i++] = hwAttrs->adcDIO | PIN_INPUT_EN;
+    adcPinTable[i++] = hwAttrs->adcDIO |
+                        PIN_NOPULL |
+                        PIN_INPUT_DIS |
+                        PIN_GPIO_OUTPUT_DIS |
+                        PIN_IRQ_DIS |
+                        PIN_DRVSTR_MIN;
+
     /* Terminate pin list */
     adcPinTable[i] = PIN_TERMINATE;
     object->pinHandle = PIN_open(&object->pinState, adcPinTable);

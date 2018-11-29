@@ -33,13 +33,15 @@
  *  ======== ADCBuf.c ========
  */
 
-#include <ti/drivers/ADCBuf.h>
-
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-/* ADC configuration array from application */
+#include <ti/drivers/ADCBuf.h>
+#include <ti/sysbios/family/arm/m3/Hwi.h>
+
 extern const ADCBuf_Config ADCBuf_config[];
+extern const uint_least8_t ADCBuf_count;
 
 /* Default ADC parameters structure */
 const ADCBuf_Params ADCBuf_defaultParams = {
@@ -51,85 +53,112 @@ const ADCBuf_Params ADCBuf_defaultParams = {
     .custom             = NULL
 };
 
+static bool isInitialized = false;
+
 /*
  *  ======== ADCBuf_close ========
  */
-void ADCBuf_close(ADCBuf_Handle handle) {
+void ADCBuf_close(ADCBuf_Handle handle)
+{
     handle->fxnTablePtr->closeFxn(handle);
 }
+
 /*
  *  ======== ADCBuf_control ========
  */
-int_fast16_t ADCBuf_control(ADCBuf_Handle handle, uint_fast8_t cmd, void *arg) {
-    return handle->fxnTablePtr->controlFxn(handle, cmd, arg);
+int_fast16_t ADCBuf_control(ADCBuf_Handle handle, uint_fast16_t cmd, void *cmdArg)
+{
+    return handle->fxnTablePtr->controlFxn(handle, cmd, cmdArg);
 }
 
 /*
  *  ======== ADCBuf_init ========
  */
-void ADCBuf_init(void) {
-    /* Call each driver's init function */
-    uint_fast8_t ADCBuf_count;
-    for (ADCBuf_count = 0; ADCBuf_config[ADCBuf_count].fxnTablePtr != NULL; ADCBuf_count++) {
-        ADCBuf_config[ADCBuf_count].fxnTablePtr->initFxn((ADCBuf_Handle) & (ADCBuf_config[ADCBuf_count]));
+void ADCBuf_init(void)
+{
+    uint_least8_t i;
+    uint_fast32_t key;
+
+    key = Hwi_disable();
+
+    if (!isInitialized) {
+        isInitialized = (bool) true;
+
+        /* Call each driver's init function */
+        for (i = 0; i < ADCBuf_count; i++) {
+            ADCBuf_config[i].fxnTablePtr->initFxn((ADCBuf_Handle) & (ADCBuf_config[i]));
+        }
     }
+
+    Hwi_restore(key);
 }
 
 /*
  *  ======== ADCBuf_open ========
  */
-ADCBuf_Handle ADCBuf_open(uint_fast8_t index, ADCBuf_Params *params) {
-    ADCBuf_Handle handle;
+ADCBuf_Handle ADCBuf_open(uint_least8_t index, ADCBuf_Params *params)
+{
+    ADCBuf_Handle handle = NULL;
 
-    /* If params are NULL use defaults */
-    if (params == NULL) {
-        params = (ADCBuf_Params *) &ADCBuf_defaultParams;
+    /* Verify driver index and state */
+    if (isInitialized && (index < ADCBuf_count)) {
+        /* If params are NULL use defaults */
+        if (params == NULL) {
+            params = (ADCBuf_Params *)&ADCBuf_defaultParams;
+        }
+
+        /* Get handle for this driver instance */
+        handle = (ADCBuf_Handle)&(ADCBuf_config[index]);
+        handle = handle->fxnTablePtr->openFxn(handle, params);
     }
 
-    /* Get handle for this driver instance */
-    handle = (ADCBuf_Handle)&(ADCBuf_config[index]);
-
-    return (handle->fxnTablePtr->openFxn(handle, params));
+    return (handle);
 }
 
 /*
  *  ======== ADCBuf_Params_init ========
  */
-void ADCBuf_Params_init(ADCBuf_Params *params) {
+void ADCBuf_Params_init(ADCBuf_Params *params)
+{
     *params = ADCBuf_defaultParams;
 }
 
 /*
  *  ======== ADCBuf_convert ========
  */
-int_fast16_t ADCBuf_convert(ADCBuf_Handle handle, ADCBuf_Conversion conversions[],  uint_fast8_t channelCount) {
+int_fast16_t ADCBuf_convert(ADCBuf_Handle handle, ADCBuf_Conversion conversions[],  uint_fast8_t channelCount)
+{
     return (handle->fxnTablePtr->convertFxn(handle, conversions, channelCount));
 }
 
 /*
  *  ======== ADCBuf_convertCancel ========
  */
-int_fast16_t ADCBuf_convertCancel(ADCBuf_Handle handle) {
+int_fast16_t ADCBuf_convertCancel(ADCBuf_Handle handle)
+{
     return (handle->fxnTablePtr->convertCancelFxn(handle));
 }
 
 /*
  *  ======== ADCBuf_getResolution ========
  */
-uint_fast8_t ADCBuf_getResolution(ADCBuf_Handle handle) {
+uint_fast8_t ADCBuf_getResolution(ADCBuf_Handle handle)
+{
     return (handle->fxnTablePtr->getResolutionFxn(handle));
 }
 
 /*
  *  ======== ADCBuf_adjustRawValues ========
  */
-int_fast16_t ADCBuf_adjustRawValues(ADCBuf_Handle handle, void *sampleBuffer, uint_fast16_t sampleCount, uint32_t adcChannel) {
-    return (handle->fxnTablePtr->adjustRawValuesFxn(handle, sampleBuffer, sampleCount, adcChannel));
+int_fast16_t ADCBuf_adjustRawValues(ADCBuf_Handle handle, void *sampleBuf, uint_fast16_t sampleCount, uint32_t adcChan)
+{
+    return (handle->fxnTablePtr->adjustRawValuesFxn(handle, sampleBuf, sampleCount, adcChan));
 }
 
 /*
  *  ======== ADCBuf_convertAdjustedToMicroVolts ========
  */
-int_fast16_t ADCBuf_convertAdjustedToMicroVolts(ADCBuf_Handle handle, uint32_t  adcChannel, void *adjustedSampleBuffer, uint32_t outputMicroVoltBuffer[], uint_fast16_t sampleCount) {
-    return (handle->fxnTablePtr->convertAdjustedToMicroVoltsFxn(handle,  adcChannel,  adjustedSampleBuffer,  outputMicroVoltBuffer, sampleCount));
+int_fast16_t ADCBuf_convertAdjustedToMicroVolts(ADCBuf_Handle handle, uint32_t  adcChan, void *adjustedSampleBuffer, uint32_t outputMicroVoltBuffer[], uint_fast16_t sampleCount)
+{
+    return (handle->fxnTablePtr->convertAdjustedToMicroVoltsFxn(handle, adcChan, adjustedSampleBuffer, outputMicroVoltBuffer, sampleCount));
 }

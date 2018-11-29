@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Texas Instruments Incorporated
+ * Copyright (c) 2016-2017, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,22 +33,23 @@
  *  ======== ADC.c ========
  */
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include <ti/drivers/ADC.h>
+#include <ti/sysbios/family/arm/m3/Hwi.h>
 
-/* Externs */
 extern const ADC_Config ADC_config[];
-
-/* Used to check status and initialization */
-static int_fast16_t ADC_count = -1;
+extern const uint_least8_t ADC_count;
 
 /* Default ADC parameters structure */
 const ADC_Params ADC_defaultParams = {
-        .custom = NULL
+    .custom = NULL,
+    .isProtected = true
 };
+
+static bool isInitialized = false;
 
 /*
  *  ======== ADC_close ========
@@ -75,11 +76,11 @@ int_fast16_t ADC_convert(ADC_Handle handle, uint16_t *value)
 }
 
 /*
- *  ======== ADC_convertRawToMicroVolts ========
+ *  ======== ADC_convertToMicroVolts ========
  */
-uint32_t ADC_convertRawToMicroVolts(ADC_Handle handle, uint16_t rawAdcValue)
+uint32_t ADC_convertToMicroVolts(ADC_Handle handle, uint16_t adcValue)
 {
-    return (handle->fxnTablePtr->convertRawToMicroVolts(handle, rawAdcValue));
+    return (handle->fxnTablePtr->convertToMicroVolts(handle, adcValue));
 }
 
 /*
@@ -87,29 +88,42 @@ uint32_t ADC_convertRawToMicroVolts(ADC_Handle handle, uint16_t rawAdcValue)
  */
 void ADC_init(void)
 {
-    if (ADC_count == -1) {
+    uint_least8_t i;
+    uint_fast32_t key;
+
+    key = Hwi_disable();
+
+    if (!isInitialized) {
+        isInitialized = (bool) true;
+
         /* Call each driver's init function */
-        for (ADC_count = 0; ADC_config[ADC_count].fxnTablePtr != NULL; ADC_count++) {
-            ADC_config[ADC_count].fxnTablePtr->initFxn((ADC_Handle)&(ADC_config[ADC_count]));
+        for (i = 0; i < ADC_count; i++) {
+            ADC_config[i].fxnTablePtr->initFxn((ADC_Handle)&(ADC_config[i]));
         }
     }
+
+    Hwi_restore(key);
 }
 
 /*
  *  ======== ADC_open ========
  */
-ADC_Handle ADC_open(uint_fast16_t index, ADC_Params *params)
+ADC_Handle ADC_open(uint_least8_t index, ADC_Params *params)
 {
-    ADC_Handle handle;
+    ADC_Handle handle = NULL;
 
-    if ((int_fast16_t)index >= ADC_count) {
-        return (NULL);
+    if (isInitialized && (index < ADC_count)) {
+        /* If params are NULL use defaults */
+        if (params == NULL) {
+            params = (ADC_Params *) &ADC_defaultParams;
+        }
+
+        /* Get handle for this driver instance */
+        handle = (ADC_Handle) &(ADC_config[index]);
+        handle = handle->fxnTablePtr->openFxn(handle, params);
     }
 
-    /* Get handle for this driver instance */
-    handle = (ADC_Handle)&(ADC_config[index]);
-
-    return (handle->fxnTablePtr->openFxn(handle, params));
+    return (handle);
 }
 
 /*

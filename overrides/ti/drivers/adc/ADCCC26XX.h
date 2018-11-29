@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Texas Instruments Incorporated
+ * Copyright (c) 2016-2017, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -103,7 +103,7 @@ typedef enum ADCCC26XX_Sampling_Duration {
  *  disabled and 1 for input scaling enabled.
  *
  *  @note   The actual reference values are slightly different for each device and are higher than the values specified above. This gain is saved in
- *          the FCFG. The function ::ADC_convertRawToMicroVolts() must be used to derive actual voltage values. Do not attempt to compare raw values
+ *          the FCFG. The function ::ADC_convertToMicroVolts() must be used to derive actual voltage values. Do not attempt to compare raw values
  *          between devices or derive a voltage from them yourself. The results of doing so will only be approximately correct.
  *
  *  @warning    Even though the upper voltage range of the ADC is 4.3 volts in fixed mode with input scaling enabled, the input should never exceed
@@ -136,11 +136,11 @@ extern const ADC_FxnTable ADCCC26XX_fxnTable;
 typedef struct ADCCC26XX_HWAttrs {
     uint8_t                             adcDIO;                     /*!< DIO that the ADC is routed to */
     uint8_t                             adcCompBInput;              /*!< Internal signal routed to comparator B */
+    bool                                returnAdjustedVal;          /*!< Should the raw output be trimmed before returning it */
     bool                                inputScalingEnabled;        /*!< Is input scaling enabled */
     ADCCC26XX_Reference_Source          refSource;                  /*!< Reference source for the ADC to use */
     ADCCC26XX_Sampling_Duration         samplingDuration;           /*!< Time the ADC spends sampling. This is load dependent */
     ADCCC26XX_Trigger_Source            triggerSource;              /*!< Source that the ADC triggers off of. Currently only supports AUXADC_TRIGGER_MANUAL */
-
 } ADCCC26XX_HWAttrs;
 
 /*!
@@ -152,6 +152,7 @@ typedef struct ADCCC26XX_Object {
     PIN_State                       pinState;                   /*!< Pin state object */
     PIN_Handle                      pinHandle;                  /*!< Pin handle */
     bool                            isOpen;                     /*!< Flag if the instance is in use */
+    bool                            isProtected;                /*!< Flag to indicate if thread safety is ensured by the driver */
 } ADCCC26XX_Object;
 
 
