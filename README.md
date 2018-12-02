@@ -1,4 +1,4 @@
-# overrides
+# The `overrides` directory
 This directory holds upgraded/modified core libraries.
 
 ## ADCBuf and ADC libraries
