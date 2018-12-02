@@ -25,6 +25,7 @@ They were merged from `tirtos_cc13xx_cc26xx_2_21_00_06`.
 ## Debugging
 * To do proper debug stepping, you need to load the debugging symbols for the
   functions that are found in the ROM. TI calls this the golden ROM image.
+* GNU GDB Server and Flashing http://www.ti.com/lit/an/swra446/swra446.pdf
 
 [TIRTOSDriversDoc]: http://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/tirtos/2_21_01_08/exports/tirtos_full_2_21_01_08/products/tidrivers_full_2_21_01_01/docs/doxygen/html/index.html
 [SYSBIOSGuideDoc]: http://www.ti.com/lit/pdf/spruex3
