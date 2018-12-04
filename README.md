@@ -56,6 +56,10 @@
 ## Systems Documentation
 * [The Idea Behind XDC](http://rtsc.eclipse.org/mediawiki-tip/images/1/12/XDCtools_Getting_Started_Guide.pdf)
 
+## Examples
+* Projects for use with the GNU C Compiler, GNUMake, XDC, and TI-RTOS:
+  `ti/tirtos_cc13xx_cc26xx_2_21_01_08/examples/GNU/CC2650_LAUNCHXL`.
+
 # The `overrides` directory
 This directory holds upgraded/modified core libraries.
 
