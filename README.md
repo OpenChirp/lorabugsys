@@ -23,6 +23,7 @@
   (should be identical files):
   - ti/tirtos_cc13xx_cc26xx_2_21_01_08/products/bios_6_46_01_38/packages/ti/sysbios/rom/cortexm/cc26xx/r2/golden/CC26xx/rtos_rom.xem3
   - ti/tirtos_cc13xx_cc26xx_2_21_00_06/products/bios_6_46_01_37/packages/ti/sysbios/rom/cortexm/cc26xx/r2/golden/CC26xx/rtos_rom.xem3
+
   Note, the source that created these ROM images is indeed in the source tree.
   It just takes a bit of searching.
 * GNU GDB Server and Flashing http://www.ti.com/lit/an/swra446/swra446.pdf
