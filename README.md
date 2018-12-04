@@ -51,7 +51,9 @@
   The subsystem outside of SYS/BIOS that control power and peripherals are
   somewhat significant, thus the combination takes on the TI-RTOS name.
 * `XDS` typically refers to the series of TI debugging hardware like the [XDS110][XDS110DebugProbeManual], which is embedded in the TI Launchpads.
-  Another note worthy XDS debugger is the XDS200, which is said to
+  Another note worthy XDS debugger is the XDS200, which is said to be faster
+  (and more expensive) than the XDS110.
+* `CCS` is the TI curated IDE with awesome debugging support.
 
 ## Systems Documentation
 * [The Idea Behind XDC](http://rtsc.eclipse.org/mediawiki-tip/images/1/12/XDCtools_Getting_Started_Guide.pdf)
