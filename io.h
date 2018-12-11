@@ -36,6 +36,7 @@ __attribute__ ((format (printf, 1, 2)));
 void phexdump(printf_t prnf, uint8_t *data, size_t size);
 
 void hardreset(void);
+uint32_t resetsource(void); // Check driverlib/sys_ctrl.h for reset source values.
 
 /* uart.c */
 bool uart_isopen(void);

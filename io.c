@@ -28,7 +28,7 @@
 #include <ti/sysbios/knl/Clock.h>
 
 /* Non-RTOS Drivers */
-#include <driverlib/sys_ctrl.h> // SysCtrlSystemReset()
+#include <driverlib/sys_ctrl.h> // SysCtrlSystemReset(), SysCtrlResetSourceGet()
 #include <driverlib/aon_wuc.h>  // AONWUCPowerStatusGet() & AONWUC_JTAG_POWER_ON
 
 #include "io.h"
@@ -386,4 +386,8 @@ void allhexdump(uint8_t *data, size_t size)
 void hardreset()
 {
     SysCtrlSystemReset();
+}
+
+uint32_t resetsource() {
+    return SysCtrlResetSourceGet();
 }
