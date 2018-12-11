@@ -26,8 +26,10 @@
 
   Note, the source that created these ROM images is indeed in the source tree.
   It just takes a bit of searching.
+* [Video about TI-RTOS Debugging](https://training.ti.com/debugging-common-application-issues-ti-rtos?cu=1127843)
 * GNU GDB Server and Flashing http://www.ti.com/lit/an/swra446/swra446.pdf
 * Checkout the [debugging quick start][DebuggingQuickStart].
+* [SYS/BIOS FAQ](http://processors.wiki.ti.com/index.php/SYS/BIOS_FAQs#4_Exception_Dump_Decoding_Using_the_CCS_Register_View)
 
 ## Explanation of Components and Dictionary
 * [`EMUPack`][EMUPackDownload] is the software that controls the debugger
