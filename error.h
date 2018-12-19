@@ -27,6 +27,15 @@
  */
 //#define DISABLE_DEBUG_PRINT
 
+
+/**@def RESET_ON_ERROR
+ * When defined, the exception and error handlers will issue
+ * a system reset if JTAG is not connected.
+ * When not defined, exception and error handlers will enter
+ * an infinite loop to hang the system.
+ */
+#define RESET_ON_ERROR
+
 /*--------------------------------------------------------*
  *                  Interface Functions                   *
  *--------------------------------------------------------*/

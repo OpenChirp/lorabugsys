@@ -14,6 +14,7 @@
 #include <ti/sysbios/family/arm/m3/Hwi.h>
 
 #include "io.h"
+#include "error.h"
 
 /**
  * This function is referenced from @ref rtos.cfg as an exception hook function.
@@ -34,9 +35,11 @@
  * @param excContext
  */
 Void ExceptionHandle(Hwi_ExcContext *excContext) {
+#ifdef RESET_ON_ERROR
     if (!jtag_ispowered()) {
         hardreset();
     }
+#endif
 }
 
 /**
@@ -49,9 +52,11 @@ Void ExceptionHandle(Hwi_ExcContext *excContext) {
  * @param stat The status code given to BIOS_exit or BIOS_abort
  */
 Void ExitHandler(Int stat) {
+#ifdef RESET_ON_ERROR
     if (!jtag_ispowered()) {
         hardreset();
     }
+#endif
     for (;;) ;
 }
 
