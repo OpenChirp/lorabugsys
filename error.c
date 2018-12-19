@@ -13,6 +13,8 @@
 /* BIOS Header files */
 #include <ti/sysbios/family/arm/m3/Hwi.h>
 
+#include <driverlib/cpu.h> // CPUcpsid
+
 #include "io.h"
 #include "error.h"
 
@@ -57,6 +59,11 @@ Void ExitHandler(Int stat) {
         hardreset();
     }
 #endif
+
+    // Disable CPU interrupts
+    CPUcpsid();
+
+    // Loop forever
     for (;;) ;
 }
 
