@@ -76,6 +76,32 @@ const uint_least8_t ADC_count = CC2650_LAUNCHXL_ADCCOUNT;
 ```
 They were merged from `tirtos_cc13xx_cc26xx_2_21_00_06`.
 
+## The uDMA Driver
+This fixes a critical issue that was solved in the C2640R2 2.30.00.28 SDK.
+The issue deals with a misuse of `uDMAChannelDisable` function
+from within `UDMACC26XX_channelDisable`. The `uDMAChannelDisable` function
+expects a channel number, but was given a channel mask. This results in
+DMA channels never being disabled, both during the startup of the SPI driver
+and the closing of the ADCBuf driver (in the ADCBuf cleanup routine).
+This issue was resoled in the cc2640r2 SDK by simply making the direct register
+write from within the `UDMACC26XX_channelDisable` function, since this register
+expects a channel mask.
+This upgrade also brings the `UDMACC26XX_disableAttribute` function, that isn't used.
+See commit 784e0035696feb367439ae55194fdafc63fefc59.
+
+There is one other uDMA problem that needs to be solved.
+The internal `isOpen` variable is never initialized to `FALSE`.
+This means that the driver may not follow the proper initialization
+routine on system reset.
+The following function should be added to the LORABUG.c file, right after
+the uDMA setup:
+```C
+void LORABUG_initUDMA() {
+    UDMACC26XX_init((UDMACC26XX_Handle)&(UDMACC26XX_config[0]));
+}
+```
+The function should then be called before SPI or ADCBuf init functions in main.
+
 
 [TIRTOSDriversDoc]: http://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/tirtos/2_21_01_08/exports/tirtos_full_2_21_01_08/products/tidrivers_full_2_21_01_01/docs/doxygen/html/index.html
 [SYSBIOSGuideDoc]: http://www.ti.com/lit/pdf/spruex3
