@@ -119,7 +119,7 @@ const uint_least8_t SPI_count = CC2650_LAUNCHXL_SPICOUNT;
 
 These changes were merged from `simplelink_cc2640r2_sdk_2_30_00_28`.
 
-# The Power Driver
+## The Power Driver
 The most important
 The new SPI driver depends on the power constraint
 `PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING`, which was only implemented
@@ -141,7 +141,7 @@ The silicon bug being reference here is in the CC2650 Errata.
 
 These changes were merged from `simplelink_cc2640r2_sdk_2_30_00_28`.
 
-# sys_ctl.[ch]
+## sys_ctl.[ch]
 This had to updated because the new Power driver required a different
 function interface to `SysCtrlAdjustRechargeAfterPowerDown`.
 Another interesting change to this library is the correction to the
