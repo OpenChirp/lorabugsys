@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,114 +29,399 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-/** ============================================================================
+/*!*****************************************************************************
  *  @file       SPI.h
  *
  *  @brief      SPI driver interface
  *
- *  The SPI header file should be included in an application as follows:
+ *  The SPI driver interface provides device independent APIs, data types,
+ *  and macros. The SPI header file should be included in an application as
+ *  follows:
  *  @code
  *  #include <ti/drivers/SPI.h>
  *  @endcode
  *
- *  # Operation #
- *  The SPI driver in TI-RTOS is designed to serve a means to move data
- *  between SPI peripherals. This driver does not interpret any of the data sent
- *  to or received from this peripheral.
+ *  # Overview #
+ *  The Serial Peripheral Interface (SPI) driver is a generic, full-duplex
+ *  driver that transmits and receives data on a SPI bus.  SPI is sometimes
+ *  called SSI (Synchronous Serial Interface).
+ *  The SPI protocol defines the format of a data transfer over the SPI bus,
+ *  but it leaves flow control, data formatting, and handshaking mechanisms
+ *  to higher-level software layers.
  *
- *  The APIs in this driver serve as an interface to a typical TI-RTOS
- *  application. The specific peripheral implementations are responsible to
- *  create all the SYS/BIOS specific primitives to allow for thread-safe
+ *  The APIs in this driver serve as an interface to a typical RTOS
+ *  application.  Its purpose is to redirect the SPI APIs to specific
+ *  driver implementations which are specified using a pointer to a
+ *  #SPI_FxnTable.  The specific SPI implementations are responsible for
+ *  creating all the RTOS specific primitives to allow for thread-safe
  *  operation.
  *
  *  The SPI driver operates on some key definitions and assumptions:
- *  - The driver operates transparent from the chip select. Some SPI controllers
- *    feature a hardware chip select to assert SPI slave peripherals. See the
- *    specific peripheral implementations on chip select requirements.
+ *  - The driver operates transparently from the chip select. Some SPI
+ *    controllers feature a hardware chip select to assert SPI slave
+ *    peripherals. See the specific peripheral implementations on chip
+ *    select requirements.
  *
- *  - The SPI protocol does not account for a built-in handshaking mechanism and
- *    neither does this SPI driver. Therefore, when operating in ::SPI_SLAVE
- *    mode, the application must provide such a mechanism to ensure that the
- *    SPI slave is ready for the SPI master. The SPI slave must call
- *    SPI_transfer() *before* the SPI master starts transmitting. Some example
- *    application mechanisms could include:
- *    - Timed delays on the SPI master to guarantee the SPI slave is be ready
+ *  - The SPI protocol does not account for a built-in handshaking mechanism
+ *    and neither does this SPI driver. Therefore, when operating in
+ *    ::SPI_SLAVE mode, the application must provide such a mechanism to
+ *    ensure that the SPI slave is ready for the SPI master. The SPI slave
+ *    must call SPI_transfer() *before* the SPI master starts transmitting.
+ *    Some example application mechanisms could include:
+ *    - Timed delays on the SPI master to guarantee the SPI slave is ready
  *      for a SPI transaction.
  *    - A form of GPIO flow control from the slave to the SPI master to notify
  *      the master when ready.
  *
- *  ## Opening the driver #
+ *  # Usage #
+ *
+ *  To use the SPI driver to send data over the SPI bus, the application
+ *  calls the following APIs:
+ *    - SPI_init(): Initialize the SPI driver.
+ *    - SPI_Params_init():  Initialize a #SPI_Params structure with default
+ *      values.  Then change the parameters from non-default values as
+ *      needed.
+ *    - SPI_open():  Open an instance of the SPI driver, passing the
+ *      initialized parameters, or NULL, and an index (described later).
+ *    - SPI_transfer():  Transmit/receive data.  This function takes a
+ *      #SPI_Transaction argument that specifies buffers for data to be
+ *      transmitted/received.
+ *    - SPI_close():  De-initialize the SPI instance.
+ *
+ *  The following code example opens a SPI instance as a master SPI,
+ *  and issues a transaction.
  *
  *  @code
- *  SPI_Handle      handle;
- *  SPI_Params      params;
+ *  SPI_Handle      spi;
+ *  SPI_Params      spiParams;
  *  SPI_Transaction spiTransaction;
+ *  uint8_t         transmitBuffer[MSGSIZE];
+ *  uint8_t         receiveBuffer[MSGSIZE];
+ *  bool            transferOK;
  *
- *  SPI_Params_init(&params);
- *  params.bitRate  = someNewBitRate;
- *  handle = SPI_open(someSPI_configIndexValue, &params);
- *  if (!handle) {
- *      System_printf("SPI did not open");
+ *  SPI_init();  // Initialize the SPI driver
+ *
+ *  SPI_Params_init(&spiParams);  // Initialize SPI parameters
+ *  spiParams.dataSize = 8;       // 8-bit data size
+ *
+ *  spi = SPI_open(Board_SPI0, &spiParams);
+ *  if (spi == NULL) {
+ *      while (1);  // SPI_open() failed
+ *  }
+ *
+ *  // Fill in transmitBuffer
+ *
+ *  spiTransaction.count = MSGSIZE;
+ *  spiTransaction.txBuf = (void *)transmitBuffer;
+ *  spiTransaction.rxBuf = (void *)receiveBuffer;
+ *
+ *  transferOK = SPI_transfer(spi, &spiTransaction);
+ *  if (!transferOK) {
+ *      // Error in SPI or transfer already in progress.
+ *      while (1);
  *  }
  *  @endcode
  *
- *  ## Transferring data #
- *  Data transmitted and received by the SPI peripheral is performed using
- *  SPI_transfer(). SPI_transfer() accepts a pointer to a SPI_Transaction
- *  structure that dictates what quantity of data is sent and received.
+ *  More details on usage are provided in the following subsections.
+ *
+ *  ### SPI Driver Configuration #
+ *
+ *  In order to use the SPI APIs, the application is required
+ *  to provide device-specific SPI configuration in the Board.c file.
+ *  The SPI driver interface defines a configuration data structure:
  *
  *  @code
- *  SPI_Transaction spiTransaction;
+ *  typedef struct SPI_Config_ {
+ *      SPI_FxnTable  const    *fxnTablePtr;
+ *      void                   *object;
+ *      void          const    *hwAttrs;
+ *  } SPI_Config;
+ *  @endcode
  *
+ *  The application must declare an array of SPI_Config elements, named
+ *  SPI_config[].  Each element of SPI_config[] must be populated with
+ *  pointers to a device specific SPI driver implementation's function
+ *  table, driver object, and hardware attributes.  The hardware attributes
+ *  define properties such as the SPI peripheral's base address, and
+ *  the MOSI and MISO pins.  Each element in SPI_config[] corresponds to
+ *  a SPI instance, and none of the elements should have NULL pointers.
+ *  There is no correlation between the index and the
+ *  peripheral designation (such as SPI0 or SPI1).  For example, it is
+ *  possible to use SPI_config[0] for SPI1.
+ *
+ *  Because the SPI configuration is very device dependent, you will need to
+ *  check the doxygen for the device specific SPI implementation.  There you
+ *  will find a description of the SPI hardware attributes.  Please also
+ *  refer to the Board.c file of any of your examples to see the SPI
+ *  configuration.
+ *
+ *  ### Initializing the SPI Driver #
+ *
+ *  SPI_init() must be called before any other SPI APIs.  This function
+ *  iterates through the elements of the SPI_config[] array, calling
+ *  the element's device implementation SPI initialization function.
+ *
+ *  ### SPI Parameters
+ *
+ *  The #SPI_Params structure is passed to the SPI_open() call.  If NULL
+ *  is passed for the parameters, SPI_open() uses default parameters.
+ *  A #SPI_Params structure is initialized with default values by passing
+ *  it to SPI_Params_init().
+ *  Some of the SPI parameters are described below.  To see brief descriptions
+ *  of all the parameters, see #SPI_Params.
+ *
+ *  #### SPI Mode
+ *  The SPI driver operates in both SPI master and SPI slave modes.
+ *  Logically, the implementation is identical, however the difference
+ *  between these two modes is driven by hardware.  The default mode is
+ *  ::SPI_MASTER, but can be set to slave mode by setting ::SPI_Params.mode
+ *  to ::SPI_SLAVE in the parameters passed to SPI_open().  See
+ *  <a href="#Master_Slave_Modes"> Master/Slave Modes</a> for further
+ *  details.
+ *
+ *  #### SPI Transfer Mode
+ *  The SPI driver supports two transfer modes of operation: blocking and
+ *  callback. The transfer mode is determined by the transferMode parameter
+ *  in the SPI_Params data structure. The SPI driver
+ *  defaults to blocking mode, if the application does not set it.
+ *  Once a SPI driver is opened, the only way to change the operation mode
+ *  is to close and re-open the SPI instance with the new transfer mode.
+ *
+ *  In blocking mode, a task's code execution is blocked until a SPI
+ *  transaction has completed or a timeout has occurred. This ensures
+ *  that only one SPI transfer operates at a given time. Other tasks requesting
+ *  SPI transfers while a transfer is currently taking place will receive
+ *  a FALSE return value.  If a timeout occurs the transfer is canceled, the
+ *  task is unblocked & will receive a FALSE return value. The transaction
+ *  count field will have the amount of frames which were transferred
+ *  successfully before the timeout.  In blocking mode, transfers cannot be
+ *  performed in software or hardware ISR context.
+ *
+ *  In callback mode, a SPI transaction functions asynchronously, which
+ *  means that it does not block code execution. After a SPI transaction
+ *  has been completed, the SPI driver calls a user-provided hook function.
+ *  Callback mode is supported in the execution context of tasks and
+ *  hardware interrupt routines.  However, if a SPI transaction is
+ *  requested while a transaction is taking place, SPI_transfer() returns
+ *  FALSE.
+ *
+ *  #### SPI Frame Formats and Data Size
+ *  The SPI driver can configure the device's SPI peripheral to transfer
+ *  data in several SPI format options: SPI (with various polarity and phase
+ *  settings), TI, and Micro-wire. The frame format is set with
+ *  SPI_Params.frameFormat. Some SPI implementations may not support all frame
+ *  formats & the SPI driver will fail to opened.  Refer to the device specific
+ *  implementation documentation for details on which frame formats are
+ *  supported.
+ *
+ *  The smallest single unit of data transmitted onto the SPI bus is called
+ *  a SPI frame and is of size SPI_Params.dataSize.  A series of SPI frames
+ *  transmitted/received on a SPI bus is known as a SPI transaction.
+ *
+ *  ### Opening the SPI Driver #
+ *  After initializing the SPI driver by calling SPI_init(), the application
+ *  can open a SPI instance by calling SPI_open().  This function
+ *  takes an index into the SPI_config[] array, and a SPI parameters data
+ *  structure.   The SPI instance is specified by the index of the SPI in
+ *  SPI_config[].  Only one SPI index can be used at a time;
+ *  calling SPI_open() a second time with the same index previously
+ *  passed to SPI_open() will result in an error.  You can,
+ *  though, re-use the index if the instance is closed via SPI_close().
+ *
+ *  If no SPI_Params structure is passed to SPI_open(), default values are
+ *  used. If the open call is successful, it returns a non-NULL value.
+ *
+ *  Example opening a SPI driver instance in blocking mode:
+ *  @code
+ *  SPI_Handle  spi;
+ *  SPI_Params  spiParams;
+ *
+ *  SPI_Params_init(&spiParams);
+ *  spiParams.transferMode = SPI_MODE_BLOCKING;
+ *  spi = SPI_open(Board_SPI0, &spiParams);
+ *
+ *  if (spi == NULL) {
+ *      // Error opening SPI
+ *      while(1);
+ *  }
+ *  @endcode
+ *
+ *  Example opening a SPI driver instance in callback mode:
+ *  @code
+ *  SPI_Handle spi;
+ *  SPI_Params spiParams;
+ *
+ *  SPI_Params_init(&spiParams);
+ *  spiParams.transferMode = SPI_MODE_CALLBACK;
+ *  spiParams.transferCallbackFxn = UserCallbackFxn;
+ *
+ *  spi = SPI_open(Board_SPI0, &spiParams);
+ *  if (spi == NULL) {
+ *      // Error opening SPI
+ *      while (1);
+ *  }
+ *  @endcode
+ *
+ *
+ *  ### SPI Transactions #
+ *
+ *  A SPI transaction consists of a series of SPI frames
+ *  transmitted/received on a SPI bus.  A SPI transaction is performed
+ *  using SPI_transfer(). SPI_transfer() accepts a pointer to a
+ *  #SPI_Transaction structure that dictates the quantity of data to be
+ *  sent and received.
+ *  The SPI_Transaction.txBuf and SPI_Transaction.rxBuf are both pointers
+ *  to data buffers.  If txBuf is NULL, the driver sends SPI frames with all
+ *  data set to the default value specified in the hardware attributes. If
+ *  rxBuf is NULL, the driver discards all SPI frames received. SPI_transfer()
+ *  of a SPI transaction is performed atomically.
+ *
+ *  @warning The use of NULL as a sentinel txBuf or rxBuf value to determine
+ *  whether the SPI transaction includes a tx or rx component implies
+ *  that it is not possible to perform a transmit or receive transfer
+ *  directly from/to a buffer with a base address of 0x00000000. To support
+ *  this rare use-case, the application will have to manually copy the
+ *  contents of location 0x00000000 to/from a temporary buffer before/after
+ *  the tx/rx SPI transaction.
+ *
+ *  When the SPI is opened, the dataSize value determines the element types
+ *  of txBuf and rxBuf. If the dataSize is from 4 to 8 bits, the driver
+ *  assumes the data buffers are of type uint8_t (unsigned char). If the
+ *  dataSize is from 8 to 16 bits, the driver assumes the data buffers are
+ *  of type uint16_t (unsigned short).  If the dataSize is greater than
+ *  16 bits, the driver assumes the data buffers are uint32_t (unsigned long).
+ *  Some SPI driver implementations may not support all data sizes; refer
+ *  to device specific SPI implementation documentation for details on
+ *  what data sizes are supported.
+ *
+ *  The optional SPI_Transaction.arg variable can only be used when the
+ *  SPI driver has been opened in callback mode. This variable is used to
+ *  pass a user-defined value into the user-defined callback function.
+ *
+ *  SPI_transfer() always performs full-duplex SPI transactions. This means
+ *  the SPI simultaneously receives data as it transmits data. The application
+ *  is responsible for formatting the data to be transmitted as well as
+ *  determining whether the data received is meaningful.
+ *  Specifics about SPI frame formatting and data sizes are provided in
+ *  device-specific data sheets and technical reference manuals.
+ *
+ *  The following code snippets perform SPI transactions.
+ *
+ *  Example transferring 6-bit SPI frames.  The transmit and receive
+ *  buffers are of type uint8_t.
+ *  @code
+ *  SPI_Transaction spiTransaction;
+ *  uint8_t         transmitBuffer[BUFSIZE];
+ *  uint8_t         receiveBuffer[BUFSIZE];
+ *  bool            transferOK;
+ *
+ *  SPI_Params_init(&spiParams);
+ *  spiParams.dataSize = 6;
+ *  spi = SPI_open(Board_SPI0, &spiParams);
+ *  ...
  *  spiTransaction.count = someIntegerValue;
- *  spiTransaction.txBuf = transmitBufferPointer;
- *  spiTransaction.rxBuf = receiveBufferPointer;
+ *  spiTransaction.txBuf = transmitBuffer;
+ *  spiTransaction.rxBuf = receiveBuffer;
  *
- *  ret = SPI_transfer(handle, &spiTransaction);
- *  if (!ret) {
- *      System_printf("Unsuccessful SPI transfer");
+ *  transferOK = SPI_transfer(spi, &spiTransaction);
+ *  if (!transferOK) {
+ *      // Error in SPI or transfer already in progress.
  *  }
  *  @endcode
  *
- *  ## Canceling a transaction #
+ *  Example transferring 12-bit SPI frames.  The transmit and receive
+ *  buffers are of type uint16_t.
+ *  @code
+ *  SPI_Transaction spiTransaction;
+ *  uint16_t        transmitBuffer[BUFSIZE];
+ *  uint16_t        receiveBuffer[BUFSIZE];
+ *  bool            transferOK;
+ *
+ *  SPI_Params_init(&spiParams);
+ *  spiParams.dataSize = 12;
+ *  spi = SPI_open(Board_SPI0, &spiParams);
+ *  ...
+ *  spiTransaction.count = someIntegerValue;
+ *  spiTransaction.txBuf = transmitBuffer;
+ *  spiTransaction.rxBuf = receiveBuffer;
+ *
+ *  transferOK = SPI_transfer(spi, &spiTransaction);
+ *  if (!transferOK) {
+ *      // Error in SPI or transfer already in progress.
+ *  }
+ *  @endcode
+ *
+ *  ### Canceling a transaction #
  *  SPI_transferCancel() is used to cancel a SPI transaction when the driver is
  *  used in ::SPI_MODE_CALLBACK mode.
  *
  *  Calling this API while no transfer is in progress has no effect. If a
- *  transfer is in progress, it canceled and a callback on the ::SPI_CallbackFxn
- *  is performed. The ::SPI_Status status field in the ::SPI_Transaction struct
- *  can be examined within the callback to determine if the transaction was
- *  successful.
+ *  transfer is in progress, it is canceled and the callback functions is
+ *  called.
+ *  The ::SPI_Status status field in the ::SPI_Transaction structure
+ *  can be examined within the callback to determine if the transaction
+ *  succeeded.
  *
+ *  Example:
  *  @code
- *  SPI_transferCancel(handle);
+ *  SPI_transferCancel(spi);
  *  @endcode
  *
  *  # Implementation #
  *
- *  This module serves as the main interface for TI-RTOS applications. Its
+ *  <h2><a NAME="Master_Slave_Modes">Master/Slave Modes</a></h2>
+ *  This SPI driver functions in both SPI master and SPI slave modes.
+ *  Logically, the implementation is identical, however the difference between
+ *  these two modes is driven by hardware. As a SPI master, the peripheral is
+ *  in control of the clock signal and therefore will commence communications
+ *  to the SPI slave immediately. As a SPI slave, the SPI driver prepares
+ *  the peripheral to transmit and receive data in a way such that the
+ *  peripheral is ready to transfer data when the SPI master initiates a
+ *  transaction.
+ *
+ *  ### Asserting on Chip Select
+ *  The SPI protocol requires that the SPI master asserts a SPI slave's chip
+ *  select pin prior to starting a SPI transaction. While this protocol is
+ *  generally followed, various types of SPI peripherals have different
+ *  timing requirements as to when and for how long the chip select pin must
+ *  remain asserted for a SPI transaction.
+ *
+ *  Commonly, the SPI master uses a hardware chip select to assert and
+ *  de-assert the SPI slave for every data frame. In other cases, a SPI slave
+ *  imposes the requirement of asserting the chip select over several SPI
+ *  data frames. This is generally accomplished by using a regular,
+ *  general-purpose output pin. Due to the complexity of such SPI peripheral
+ *  implementations, this SPI driver has been designed to operate
+ *  transparently to the SPI chip select. When the hardware chip
+ *  select is used, the peripheral automatically selects/enables the
+ *  peripheral. When using a software chip select, the application needs to
+ *  handle the proper chip select and pin configuration.  Chip select support
+ *  will vary per SPI peripheral, refer to the device specific implementation
+ *  documentation for details on chip select support.
+ *
+ *  - _Hardware chip select_  No additional action by the application is
+ *    required.
+ *  - _Software chip select_  The application needs to handle the chip select
+ *    assertion and de-assertion for the proper SPI peripheral.
+ *
+ *  # Implementation #
+ *
+ *  This module serves as the main interface for RTOS applications. Its
  *  purpose is to redirect the module's APIs to specific peripheral
- *  implementations which are specified using a pointer to a SPI_FxnTable.
+ *  implementations which are specified using a pointer to a #SPI_FxnTable.
  *
- *  The SPI driver interface module is joined (at link time) to a
- *  NULL-terminated array of SPI_Config data structures named *SPI_config*.
- *  *SPI_config* is implemented in the application with each entry being an
- *  instance of a SPI peripheral. Each entry in *SPI_config* contains a:
- *  - (SPI_FxnTable *) to a set of functions that implement a SPI peripheral
- *  - (void *) data object that is associated with the SPI_FxnTable
- *  - (void *) hardware attributes that are associated to the SPI_FxnTable
+ *  The SPI driver interface module is joined (at link time) to an
+ *  array of SPI_Config data structures named *SPI_config*.
+ *  The SPI_config array is implemented in the application with each entry
+ *  being an instance of a SPI peripheral. Each entry in *SPI_config* contains
+ *  the following:
+ *  - (SPI_FxnTable *)  A pointer to a set of functions that implement a
+ *    SPI peripheral.
+ *  - (void *)  A data object that is associated with the SPI_FxnTable.
+ *  - (void *)  The hardware attributes that are associated with the
+ *    SPI_FxnTable.
  *
- *  # Instrumentation #
- *
- *  The SPI driver interface produces log statements if instrumentation is
- *  enabled.
- *
- *  Diagnostics Mask | Log details |
- *  ---------------- | ----------- |
- *  Diags_USER1      | basic operations performed |
- *  Diags_USER2      | detailed operations performed |
- *
- *  ============================================================================
+ *******************************************************************************
  */
 
 #ifndef ti_drivers_SPI__include
@@ -146,9 +431,9 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  *  @defgroup SPI_CONTROL SPI_control command and status codes
@@ -167,7 +452,7 @@ extern "C" {
  * #define SPIXYZ_CMD_COMMAND1     SPI_CMD_RESERVED + 1
  * @endcode
  */
-#define SPI_CMD_RESERVED            32
+#define SPI_CMD_RESERVED           (32)
 
 /*!
  * Common SPI_control status code reservation offset.
@@ -181,7 +466,7 @@ extern "C" {
  * #define SPIXYZ_STATUS_ERROR2    SPI_STATUS_RESERVED - 2
  * @endcode
  */
-#define SPI_STATUS_RESERVED        -32
+#define SPI_STATUS_RESERVED        (-32)
 
 /**
  *  @defgroup SPI_STATUS Status Codes
@@ -196,7 +481,7 @@ extern "C" {
  * SPI_control() returns SPI_STATUS_SUCCESS if the control code was executed
  * successfully.
  */
-#define SPI_STATUS_SUCCESS         0
+#define SPI_STATUS_SUCCESS         (0)
 
 /*!
  * @brief   Generic error status code returned by SPI_control().
@@ -204,7 +489,7 @@ extern "C" {
  * SPI_control() returns SPI_STATUS_ERROR if the control code was not executed
  * successfully.
  */
-#define SPI_STATUS_ERROR          -1
+#define SPI_STATUS_ERROR           (-1)
 
 /*!
  * @brief   An error status code returned by SPI_control() for undefined
@@ -213,7 +498,7 @@ extern "C" {
  * SPI_control() returns SPI_STATUS_UNDEFINEDCMD if the control code is not
  * recognized by the driver implementation.
  */
-#define SPI_STATUS_UNDEFINEDCMD   -2
+#define SPI_STATUS_UNDEFINEDCMD    (-2)
 /** @}*/
 
 /**
@@ -233,22 +518,24 @@ extern "C" {
 /*!
  *  @brief    Wait forever define
  */
-#define SPI_WAIT_FOREVER ~(0)
+#define SPI_WAIT_FOREVER           (~(0U))
 
 /*!
  *  @brief      A handle that is returned from a SPI_open() call.
  */
-typedef struct SPI_Config      *SPI_Handle;
+typedef struct SPI_Config_    *SPI_Handle;
 
 /*!
  *  @brief      Status codes that are set by the SPI driver.
  */
-typedef enum SPI_Status {
-    SPI_TRANSFER_COMPLETED = 0,
-    SPI_TRANSFER_STARTED,
-    SPI_TRANSFER_CANCELED,
-    SPI_TRANSFER_FAILED,
-    SPI_TRANSFER_CSN_DEASSERT
+typedef enum SPI_Status_ {
+    SPI_TRANSFER_COMPLETED = 0,      /*!< SPI transfer completed */
+    SPI_TRANSFER_STARTED,            /*!< SPI transfer started and in progress */
+    SPI_TRANSFER_CANCELED,           /*!< SPI transfer was canceled */
+    SPI_TRANSFER_FAILED,             /*!< SPI transfer failed */
+    SPI_TRANSFER_CSN_DEASSERT,       /*!< SPI chip select was de-asserted */
+    SPI_TRANSFER_PEND_CSN_ASSERT,    /*!< SPI transfer is pending until the chip select is asserted */
+    SPI_TRANSFER_QUEUED              /*!< SPI transfer added to transaction queue */
 } SPI_Status;
 
 /*!
@@ -259,17 +546,18 @@ typedef enum SPI_Status {
  *  The arg variable is an user-definable argument which gets passed to the
  *  ::SPI_CallbackFxn when the SPI driver is in ::SPI_MODE_CALLBACK.
  */
-typedef struct SPI_Transaction {
+typedef struct SPI_Transaction_ {
     /* User input (write-only) fields */
-    size_t     count;      /*!< Number of frames for this transaction */
-    void      *txBuf;      /*!< void * to a buffer with data to be transmitted */
-    void      *rxBuf;      /*!< void * to a buffer to receive data */
-    void      *arg;        /*!< Argument to be passed to the callback function */
+    size_t     count;       /*!< Number of frames for this transaction */
+    void      *txBuf;       /*!< void * to a buffer with data to be transmitted */
+    void      *rxBuf;       /*!< void * to a buffer to receive data */
+    void      *arg;         /*!< Argument to be passed to the callback function */
 
     /* User output (read-only) fields */
-    SPI_Status status;     /*!< Status code set by SPI_transfer */
+    SPI_Status status;      /*!< Status code set by SPI_transfer */
 
-    /* Driver-use only fields */
+    void *nextPtr;          /*!< Field used internally by the driver and must
+                                 never be accessed by the application. */
 } SPI_Transaction;
 
 /*!
@@ -279,28 +567,30 @@ typedef struct SPI_Transaction {
  *  @param      SPI_Handle          SPI_Handle
  *  @param      SPI_Transaction*    SPI_Transaction*
  */
-typedef void        (*SPI_CallbackFxn) (SPI_Handle handle,
-                                        SPI_Transaction * transaction);
+typedef void (*SPI_CallbackFxn) (SPI_Handle handle,
+    SPI_Transaction *transaction);
 /*!
  *  @brief
  *  Definitions for various SPI modes of operation.
  */
-typedef enum SPI_Mode {
-    SPI_MASTER      = 0,    /*!< SPI in master mode */
-    SPI_SLAVE       = 1     /*!< SPI in slave mode */
+typedef enum SPI_Mode_ {
+    SPI_MASTER = 0,    /*!< SPI in master mode */
+    SPI_SLAVE  = 1     /*!< SPI in slave mode */
 } SPI_Mode;
 
 /*!
  *  @brief
  *  Definitions for various SPI data frame formats.
  */
-typedef enum SPI_FrameFormat {
-    SPI_POL0_PHA0   = 0,    /*!< SPI mode Polarity 0 Phase 0 */
-    SPI_POL0_PHA1   = 1,    /*!< SPI mode Polarity 0 Phase 1 */
-    SPI_POL1_PHA0   = 2,    /*!< SPI mode Polarity 1 Phase 0 */
-    SPI_POL1_PHA1   = 3,    /*!< SPI mode Polarity 1 Phase 1 */
-    SPI_TI          = 4,    /*!< TI mode */
-    SPI_MW          = 5     /*!< Micro-wire mode */
+typedef enum SPI_FrameFormat_ {
+    SPI_POL0_PHA0 = 0,    /*!< SPI mode Polarity 0 Phase 0 */
+    SPI_POL0_PHA1 = 1,    /*!< SPI mode Polarity 0 Phase 1 */
+    SPI_POL1_PHA0 = 2,    /*!< SPI mode Polarity 1 Phase 0 */
+    SPI_POL1_PHA1 = 3,    /*!< SPI mode Polarity 1 Phase 1 */
+    SPI_TI        = 4,    /*!< TI mode (not supported on all
+                               implementations) */
+    SPI_MW        = 5     /*!< Micro-wire mode (not supported on all
+                               implementations) */
 } SPI_FrameFormat;
 
 /*!
@@ -313,7 +603,7 @@ typedef enum SPI_FrameFormat {
  *  calls a ::SPI_CallbackFxn callback function when the transaction has
  *  completed.
  */
-typedef enum SPI_TransferMode {
+typedef enum SPI_TransferMode_ {
     /*!
      * SPI_transfer() blocks execution. This mode can only be used when called
      * within a Task context
@@ -321,7 +611,8 @@ typedef enum SPI_TransferMode {
     SPI_MODE_BLOCKING,
     /*!
      * SPI_transfer() does not block code execution and will call a
-     * ::SPI_CallbackFxn. This mode can be used in a Task, Swi, or Hwi context.
+     * ::SPI_CallbackFxn. This mode can be used in a Task, software or hardware
+     * interrupt context.
      */
     SPI_MODE_CALLBACK
 } SPI_TransferMode;
@@ -334,92 +625,80 @@ typedef enum SPI_TransferMode {
  *
  *  @sa         SPI_Params_init()
  */
-typedef struct SPI_Params {
-    SPI_TransferMode    transferMode;       /*!< Blocking or Callback mode */
-    uint32_t            transferTimeout;    /*!< Transfer timeout in system
-                                                 ticks (Not supported with all
-                                                 implementations */
-    SPI_CallbackFxn     transferCallbackFxn;/*!< Callback function pointer */
-    SPI_Mode            mode;               /*!< Master or Slave mode */
-    uint32_t            bitRate;            /*!< SPI bit rate in Hz */
-    uint32_t            dataSize;           /*!< SPI data frame size in bits */
-    SPI_FrameFormat     frameFormat;        /*!< SPI frame format */
-    uintptr_t           custom;             /*!< Custom argument used by driver
-                                                 implementation */
+typedef struct SPI_Params_ {
+    SPI_TransferMode transferMode;       /*!< Blocking or Callback mode */
+    uint32_t         transferTimeout;    /*!< Transfer timeout in system
+                                              ticks */
+    SPI_CallbackFxn  transferCallbackFxn;/*!< Callback function pointer */
+    SPI_Mode         mode;               /*!< Master or Slave mode */
+    uint32_t         bitRate;            /*!< SPI bit rate in Hz */
+    uint32_t         dataSize;           /*!< SPI data frame size in bits */
+    SPI_FrameFormat  frameFormat;        /*!< SPI frame format */
+    void            *custom;             /*!< Custom argument used by driver
+                                              implementation */
 } SPI_Params;
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_close().
  */
-typedef void        (*SPI_CloseFxn)          (SPI_Handle handle);
+typedef void (*SPI_CloseFxn) (SPI_Handle handle);
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_control().
  */
-typedef int         (*SPI_ControlFxn)        (SPI_Handle handle,
-                                              unsigned int cmd,
-                                              void *arg);
+typedef int_fast16_t (*SPI_ControlFxn) (SPI_Handle handle, uint_fast16_t cmd,
+    void *arg);
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_init().
  */
-typedef void        (*SPI_InitFxn)           (SPI_Handle handle);
+typedef void (*SPI_InitFxn) (SPI_Handle handle);
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_open().
  */
-typedef SPI_Handle  (*SPI_OpenFxn)           (SPI_Handle handle,
-                                              SPI_Params *params);
-
-/*!
- *  @brief      A function pointer to a driver specific implementation of
- *              SPI_serviceISR().
- */
-typedef void        (*SPI_ServiceISRFxn)     (SPI_Handle handle);
+typedef SPI_Handle (*SPI_OpenFxn) (SPI_Handle handle, SPI_Params *params);
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_transfer().
  */
-typedef bool        (*SPI_TransferFxn)       (SPI_Handle handle,
-                                              SPI_Transaction *transaction);
+typedef bool (*SPI_TransferFxn) (SPI_Handle handle,
+    SPI_Transaction *transaction);
 
 /*!
  *  @brief      A function pointer to a driver specific implementation of
  *              SPI_transferCancel().
  */
-typedef void        (*SPI_TransferCancelFxn) (SPI_Handle handle);
+typedef void (*SPI_TransferCancelFxn) (SPI_Handle handle);
 
 /*!
  *  @brief      The definition of a SPI function table that contains the
  *              required set of functions to control a specific SPI driver
  *              implementation.
  */
-typedef struct SPI_FxnTable {
+typedef struct SPI_FxnTable_ {
     /*! Function to close the specified peripheral */
-    SPI_CloseFxn            closeFxn;
+    SPI_CloseFxn          closeFxn;
 
     /*! Function to implementation specific control function */
-    SPI_ControlFxn          controlFxn;
+    SPI_ControlFxn        controlFxn;
 
     /*! Function to initialize the given data object */
-    SPI_InitFxn             initFxn;
+    SPI_InitFxn           initFxn;
 
     /*! Function to open the specified peripheral */
-    SPI_OpenFxn             openFxn;
+    SPI_OpenFxn           openFxn;
 
     /*! Function to initiate a SPI data transfer */
-    SPI_TransferFxn         transferFxn;
+    SPI_TransferFxn       transferFxn;
 
     /*! Function to cancel SPI data transfer */
-    SPI_TransferCancelFxn   transferCancelFxn;
-
-    /*! Function to service the SPI instance */
-    SPI_ServiceISRFxn       serviceISRFxn;
+    SPI_TransferCancelFxn transferCancelFxn;
 } SPI_FxnTable;
 
 /*!
@@ -433,7 +712,7 @@ typedef struct SPI_FxnTable {
  *
  *  @sa     SPI_init()
  */
-typedef struct SPI_Config {
+typedef struct SPI_Config_ {
     /*! Pointer to a table of driver-specific implementations of SPI APIs */
     SPI_FxnTable const *fxnTablePtr;
 
@@ -460,7 +739,7 @@ extern void SPI_close(SPI_Handle handle);
  *          SPI_Handle.
  *
  *  Commands for SPI_control can originate from SPI.h or from implementation
- *  specific SPI*.h (_SPICC26XX.h_, _SPITiva.h_, etc.. ) files.
+ *  specific SPI*.h (_SPICC26XX.h_, _SPIMSP432.h_, etc.. ) files.
  *  While commands from SPI.h are API portable across driver implementations,
  *  not all implementations may support all these commands.
  *  Conversely, commands from driver implementation specific SPI*.h files add
@@ -484,7 +763,7 @@ extern void SPI_close(SPI_Handle handle);
  *
  *  @param  cmd         SPI.h or SPI*.h commands.
  *
- *  @param  arg         An optional R/W (read/write) command argument
+ *  @param  controlArg  An optional R/W (read/write) command argument
  *                      accompanied with cmd
  *
  *  @return Implementation specific return codes. Negative values indicate
@@ -492,7 +771,8 @@ extern void SPI_close(SPI_Handle handle);
  *
  *  @sa     SPI_open()
  */
-extern int SPI_control(SPI_Handle handle, unsigned int cmd, void *arg);
+extern int_fast16_t SPI_control(SPI_Handle handle, uint_fast16_t cmd,
+    void *controlArg);
 
 /*!
  *  @brief  This function initializes the SPI module.
@@ -522,7 +802,7 @@ extern void SPI_init(void);
  *  @sa     SPI_init()
  *  @sa     SPI_close()
  */
-extern SPI_Handle SPI_open(unsigned int index, SPI_Params *params);
+extern SPI_Handle SPI_open(uint_least8_t index, SPI_Params *params);
 
 /*!
  *  @brief  Function to initialize the SPI_Params struct to its defaults
@@ -542,29 +822,31 @@ extern SPI_Handle SPI_open(unsigned int index, SPI_Params *params);
 extern void SPI_Params_init(SPI_Params *params);
 
 /*!
- *  @brief  Function to service the SPI module's interrupt service routine
- *
- *  This function is not supported on all driver implementations.  Refer to
- *  implementation specific documentation for details.
- *
- *  @param  handle      A SPI_Handle
- */
-extern void SPI_serviceISR(SPI_Handle handle);
-
-/*!
  *  @brief  Function to perform SPI transactions
  *
  *  If the SPI is in ::SPI_MASTER mode, it will immediately start the
- *  transaction. If the SPI is in ::SPI_SLAVE mode, it prepares itself for a
- *  transaction with a SPI master.
+ *  transaction. If the SPI is in ::SPI_SLAVE mode, it prepares the driver for
+ *  a transaction with a SPI master device. The device will then wait until
+ *  the master begins the transfer.
  *
- *  In ::SPI_MODE_BLOCKING, SPI_transfer will block task execution until the
- *  transaction has completed.
+ *  In ::SPI_MODE_BLOCKING, %SPI_transfer() will block task execution until the
+ *  transaction has completed or a timeout has occurred.
  *
- *  In ::SPI_MODE_CALLBACK, SPI_transfer() does not block task execution and
- *  calls a ::SPI_CallbackFxn. This makes the SPI_tranfer() safe to be used
- *  within a Task, Swi, or Hwi context. The ::SPI_Transaction structure must
- *  stay persistent until the SPI_transfer function has completed!
+ *  In ::SPI_MODE_CALLBACK, %SPI_transfer() does not block task execution, but
+ *  calls a ::SPI_CallbackFxn once the transfer has finished. This makes
+ *  %SPI_tranfer() safe to be used within a Task, software or hardware
+ *  interrupt context. If queued transactions are supported SPI_Transfer may
+ *  be called multiple times to queue multiple transactions. If the driver does
+ *  not support this functionality additional calls will return false. Refer to
+ *  device specific SPI driver documentation for support information.
+ *
+ *  From calling %SPI_transfer() until transfer completion, the SPI_Transaction
+ *  structure must stay persistent and must not be altered by application code.
+ *  It is also forbidden to modify the content of the SPI_Transaction.txBuffer
+ *  during a transaction, even though the physical transfer might not have
+ *  started yet. Doing this can result in data corruption. This is especially
+ *  important for slave operations where %SPI_transfer() might be called a long
+ *  time before the actual data transfer begins.
  *
  *  @param  handle      A SPI_Handle
  *
@@ -572,8 +854,11 @@ extern void SPI_serviceISR(SPI_Handle handle);
  *                      transaction except SPI_Transaction.count and
  *                      SPI_Transaction.status are WO (write-only) unless
  *                      otherwise noted in the driver implementations. If a
- *                      transaction timeout has occured, SPI_Transaction.count
+ *                      transaction timeout has occurred, SPI_Transaction.count
  *                      will contain the number of frames that were transferred.
+ *                      Neither is it allowed to modify the transaction object nor
+ *                      the content of SPI_Transaction.txBuffer until the transfer
+ *                      has completed.
  *
  *  @return true if started successfully; else false
  *

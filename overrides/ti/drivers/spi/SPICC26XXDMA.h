@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -72,15 +72,22 @@
  *     modules are disabled, TX and RX FIFOs are flushed and all bytes are ignored.
  *   - After a successful transfer, RX overrun IRQ and SPI module remains enabled and UDMA module is disabled.
  *     SPI_transfer() must be called again before RX FIFO goes full in order to
- *     avoid overflow. If the TX buffer is underflowed, zeros will be outputted.
+ *     avoid overflow. If the TX buffer is underflowed, zeros will be output.
  *     It is safe to call another SPI_transfer() from the transfer callback,
- *     see [Continous Slave Transfer] (@ref USE_CASE_CST) use case below.
+ *     see [Continuous Slave Transfer] (@ref USE_CASE_CST) use case below.
  *   - The SPI driver supports partial return, that can be used if the
  *     transfer size is unknown. If PARTIAL_RETURN is enabled, the transfer will end when
  *     chip select is deasserted. The ::SPI_Transaction.status and the ::SPI_Transaction.count
  *     will be updated to indicate whether the transfer ended due to a chip select deassertion
  *     and how many bytes were transferred. See [Slave Mode With Return Partial] (@ref USE_CASE_RP)
  *     use case below.
+ *
+ * @warning The SPI modules on the CC13x0, CC26x0, and CC26x0R2 devices have a bug which may result
+ *          in TX data being lost when operating in SPI slave mode. Please refer to the device errata sheet for full details.
+ *          The SPI protocol should therefore include a data integrity check, such as appending a CRC
+ *          to the payload to ensure all the data was transmitted correctly by the SPI slave.
+ *
+ * @warning This driver does not support queueing multiple SPI transactions.
  *
  * The following apply for master operation:
  *   - SPI and UDMA modules are enabled by calling SPI_transfer().
@@ -110,7 +117,7 @@
  * Timeout can occur in ::SPI_MODE_BLOCKING, there's no timeout in ::SPI_MODE_CALLBACK.
  * When in ::SPI_MODE_CALLBACK, the transfer must be cancelled by calling SPI_transferCancel().\n
  * If a timeout happens in either  ::SPI_SLAVE or ::SPI_MASTER mode,
- * the receive buffer will contain the bytes received up until the timeout occured.
+ * the receive buffer will contain the bytes received up until the timeout occurred.
  * The SPI transaction status will be set to ::SPI_TRANSFER_FAILED.
  * The SPI transaction count will be set to the number of bytes sent/received before timeout.
  * The remaining bytes will be flushed from the TX FIFO so that the subsequent transfer
@@ -147,7 +154,7 @@
  *  @note The external hardware connected to the SPI might have some pull configured on the
  *        SPI lines. When the SPI is inactive, this might cause leakage on the IO and the
  *        current consumption to increase. The application must configure a pull configuration
- *        that alignes with the external hardware.
+ *        that aligns with the external hardware.
  *        See [Ensure low power during inactive periods] (@ref USE_CASE_LPWR) for code example.
  *
  *  # SPI details #
@@ -178,7 +185,7 @@
  *  ### Multiple slaves when operating in master mode #
  *  In a scenario where the SPI module is operating in master mode with multiple
  *  SPI slaves, the chip select pin can be reallocated at runtime to select the
- *  appropiate slave device. See [Master Mode With Multiple Slaves](@ref USE_CASE_MMMS) use case below.
+ *  appropriate slave device. See [Master Mode With Multiple Slaves](@ref USE_CASE_MMMS) use case below.
  *  This is only relevant when chip select is a hardware chip select. Otherwise the application
  *  can control the chip select pins directly using the PIN driver.
  *
@@ -207,8 +214,10 @@
  *
  *  ### Transfer Size Limit #
  *
- *  The UDMA contoller only supports data transfers of upto 1024
- *  data frames. A data frame can be 4 to 16 bits in length.
+ *  The UDMA controller only supports data transfers of up to 1024 data frames.
+ *  A transfer with more than 1024 frames will be transmitted/received in
+ *  multiple 1024 sized portions until all data has been transmitted/received.
+ *  A data frame can be 4 to 16 bits in length.
  *
  *  ### Scratch Buffers #
  *  A uint16_t scratch buffer is used to allow SPI_transfers where txBuf or rxBuf
@@ -227,6 +236,17 @@
  *  buffer location. At the beginning of the transfer, this buffer holds outgoing
  *  data. At the end of the transfer, the outgoing data are overwritten and
  *  the buffer holds the received SPI data.
+ *
+ *  ## Polling SPI transfers #
+ *  When used in blocking mode small SPI transfers are can be done by polling
+ *  the peripheral & sending data frame-by-frame.  This will not block the task
+ *  which requested the transfer, but instead immediately perform the transfer
+ *  & return.  The minDmaTransferSize field in the hardware attributes is
+ *  the threshold; if the transaction count is below the threshold a polling
+ *  transfer is performed; otherwise a DMA transfer is done.  This is intended
+ *  to reduce the overhead of setting up a DMA transfer to only send a few
+ *  data frames.  Keep in mind that during polling transfers the current task
+ *  is still being executed; there is no context switch to another task.
  *
  * # Supported Functions #
  * | Generic API function  | API function                   | Description                                                 |
@@ -301,8 +321,8 @@
  *  SPI_transfer(handle, &transaction);
  *  @endcode
  *
- * ### Continous Slave Transfer In ::SPI_MODE_CALLBACK @anchor USE_CASE_CST #
- *  This use case will configure the SPI driver to transfer continously in
+ * ### Continuous Slave Transfer In ::SPI_MODE_CALLBACK @anchor USE_CASE_CST #
+ *  This use case will configure the SPI driver to transfer continuously in
  *  ::SPI_MODE_CALLBACK, 16 bytes at the time and echoing received data after every
  *  16 bytes.
  *  @code
@@ -313,7 +333,7 @@
  *      SPI_transfer(handle, transaction);
  *  }
  *
- *  static void taskFxn(UArg a0, UArg a1)
+ *  static void taskFxn(uintptr_t a0, uintptr_t a1)
  *  {
  *      SPI_Handle handle;
  *      SPI_Params params;
@@ -399,7 +419,7 @@
  *  }
  *
  *  // From your_application.c
- *  static void taskFxn(UArg a0, UArg a1)
+ *  static void taskFxn(uintptr_t a0, uintptr_t a1)
  *  {
  *      SPI_Handle handle;
  *      SPI_Params params;
@@ -475,6 +495,93 @@
  *  }
  *  @endcode
  *
+ *  ### Wake Up On Chip Select Deassertion In Slave Mode Using ::SPI_MODE_CALLBACK #
+ *  To wake the SPI slave device up on deassertion of the chip select, the chip select
+ *  pin must be controled outside of the SPI driver in between SPI transfers.
+ *  The example below show how this can be implemented by registering the chip select pin
+ *  with the PIN driver and configuring a callback on a falling edge.
+ *  In the PIN callback, the chip select pin is released from the PIN driver,
+ *  the SPI driver is opened, and a transaction started. During the SPI callback, the SPI
+ *  driver is closed again and the chip select pin is reconfigured to trigger a callback on
+ *  a falling edge again.
+ *
+ *  *Note: The SPI master must allow enough time between deasserting the chip select and the
+ *  start of the transaction for the SPI slave to wake up and open up the SPI driver.
+ *
+ *  @code
+ *  // Global variables
+ *  SPI_Handle spiHandle
+ *  SPI_Params spiParams;
+ *  SPI_Transaction spiTransaction;
+ *  const uint8_t transferSize = 8;
+ *  uint8_t txBuf[8];
+ *  PIN_Handle pinHandle;
+ *  PIN_Config pinConfig[] = {
+ *              PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE | CS_PIN_ID,
+ *              PIN_TERMINATE  // Terminate list
+ *  };
+ *
+ *  // Chip select callback
+ *  static void chipSelectCallback(PIN_Handle handle, PIN_Id pinId)
+ *  {
+ *      // Release the chip select pin
+ *      PIN_remove(handle, pinId);
+ *
+ *      // Open SPI driver
+ *      spiHandle = SPI_open(Board_SPI, &spiParams);
+ *
+ *      // Issue echo transfer
+ *      SPI_transfer(spiHandle, &spiTransaction);
+ *  }
+ *
+ *  // SPI transfer callback
+ *  static void transferCallback(SPI_Handle handle, SPI_Transaction *transaction)
+ *  {
+ *      // Close the SPI driver
+ *      SPI_close(handle);
+ *
+ *      // Add chip select back to the PIN driver
+ *      PIN_add(pinHandle, pinConfig[0]);
+ *
+ *      // Register chip select callback
+ *      PIN_registerIntCb(pinHandle, chipSelectCallback);
+ *  }
+ *
+ *  // From your_application.c
+ *  static void taskFxn(uintptr_t a0, uintptr_t a1)
+ *  {
+ *      uint8_t i;
+ *      PIN_State   pinState;
+ *
+ *      // Setup SPI params
+ *      SPI_Params_init(&spiParams);
+ *      spiParams.bitRate     = 1000000;
+ *      spiParams.frameFormat = SPI_POL1_PHA1;
+ *      spiParams.mode        = SPI_SLAVE;
+ *      spiParams.dataSize    = transferSize;
+ *      spiParams.transferMode = SPI_MODE_CALLBACK;
+ *      spiParams.transferCallbackFxn = transferCallback;
+ *
+ *      // Setup SPI transaction
+ *      spiTransaction.arg = NULL;
+ *      spiTransaction.count = transferSize;
+ *      spiTransaction.txBuf = txBuf;
+ *      spiTransaction.rxBuf = txBuf;
+ *
+ *      // First echo message
+ *      for (i = 0; i < transferSize; i++) {
+ *          txBuf[i] = i;
+ *      }
+ *
+ *      // Open PIN driver and configure chip select pin callback
+ *      pinHandle = PIN_open(&pinState, pinConfig);
+ *      PIN_registerIntCb(pinHandle, chipSelectCallback);
+ *
+ *      // Wait forever
+ *      while(true);
+ *  }
+ *  @endcode
+ *
  *  # Instrumentation #
  *  The SPI driver interface produces log statements if instrumentation is
  *  enabled.
@@ -537,7 +644,7 @@ extern "C" {
  * reception is inactive for a given 32-bit period.  With this command @b arg
  * is @a don't @a care and it returns SPI_STATUS_SUCCESS.
  */
-#define SPICC26XXDMA_CMD_RETURN_PARTIAL_ENABLE  SPI_CMD_RESERVED + 0
+#define SPICC26XXDMA_CMD_RETURN_PARTIAL_ENABLE  (SPI_CMD_RESERVED + 0)
 
 /*!
  * @brief Command used by SPI_control to disable partial return
@@ -546,7 +653,7 @@ extern "C" {
  * behavior where SPI_transfer blocks until all data bytes were received. With
  * this comand @b arg is @a don't @a care and it returns SPI_STATUS_SUCCESS.
  */
-#define SPICC26XXDMA_CMD_RETURN_PARTIAL_DISABLE SPI_CMD_RESERVED + 1
+#define SPICC26XXDMA_CMD_RETURN_PARTIAL_DISABLE (SPI_CMD_RESERVED + 1)
 
 /*!
  * @brief Command used by SPI_control to re-configure chip select pin
@@ -554,23 +661,13 @@ extern "C" {
  * This command specifies a chip select pin
  * With this command @b arg is of type @c PIN_Id and it return SPI_STATUS_SUCCESS
  */
-#define SPICC26XXDMA_CMD_SET_CSN_PIN            SPI_CMD_RESERVED + 2
-
-/*!
- * @brief Command used by SPI_control to re-configure a wakeup pin
- *
- * This command specifies a wakeup pin
- * With this command @b arg is of type @c SPICC26XXDMA_CallbackFxn and it return
- * SPI_STATUS_SUCCESS
- */
-#define SPICC26XXDMA_CMD_SET_CSN_WAKEUP         SPI_CMD_RESERVED + 3
+#define SPICC26XXDMA_CMD_SET_CSN_PIN            (SPI_CMD_RESERVED + 2)
 /** @}*/
 
 /* BACKWARDS COMPATIBILITY */
 #define SPICC26XXDMA_RETURN_PARTIAL_ENABLE      SPICC26XXDMA_CMD_RETURN_PARTIAL_ENABLE
 #define SPICC26XXDMA_RETURN_PARTIAL_DISABLE     SPICC26XXDMA_CMD_RETURN_PARTIAL_DISABLE
 #define SPICC26XXDMA_SET_CSN_PIN                SPICC26XXDMA_CMD_SET_CSN_PIN
-#define SPICC26XXDMA_SET_CSN_WAKEUP             SPICC26XXDMA_CMD_SET_CSN_WAKEUP
 /* END BACKWARDS COMPATIBILITY */
 
 /*!
@@ -593,15 +690,6 @@ typedef enum SPICC26XXDMA_FrameSize {
     SPICC26XXDMA_8bit  = 0,
     SPICC26XXDMA_16bit = 1
 } SPICC26XXDMA_FrameSize;
-
-/*!
- *  @internal
- *  @brief      The definition of a callback function used when wakeup on
- *              chip select is enabled
- *
- *  @param      SPI_Handle          SPI_Handle
- */
-typedef void        (*SPICC26XXDMA_CallbackFxn) (SPI_Handle handle);
 
 /*!
  *  @brief  SPICC26XXDMA Hardware attributes
@@ -690,14 +778,17 @@ typedef struct SPICC26XXDMA_HWAttrsV1 {
     uint32_t         rxChannelBitMask;
     /*! uDMA controlTable channel index */
     uint32_t         txChannelBitMask;
-    /*!< SPI MOSI pin */
+    /*! SPI MOSI pin */
     PIN_Id           mosiPin;
-    /*!< SPI MISO pin */
+    /*! SPI MISO pin */
     PIN_Id           misoPin;
-    /*!< SPI CLK pin */
+    /*! SPI CLK pin */
     PIN_Id           clkPin;
-    /*!< SPI CSN pin */
+    /*! SPI CSN pin */
     PIN_Id           csnPin;
+
+    /*! Minimum transfer size for DMA based transfer */
+    uint32_t minDmaTransferSize;
 } SPICC26XXDMA_HWAttrsV1;
 
 /*!
@@ -728,6 +819,8 @@ typedef struct SPICC26XXDMA_Object {
 
     /* SPI current transaction */
     SPI_Transaction        *currentTransaction; /*!< Ptr to the current transaction*/
+    size_t                 amtDataXferred;      /*!< Number of frames transferred */
+    size_t                 currentXferAmt;      /*!< Size of current DMA transfer */
     SPICC26XXDMA_FrameSize frameSize;           /*!< Data frame size variable */
 
     /* Support for dynamic CSN pin allocation */
@@ -742,9 +835,7 @@ typedef struct SPICC26XXDMA_Object {
 
     /* Optional slave mode features */
     bool                   returnPartial;      /*!< Optional slave mode return partial on CSN deassert */
-#ifdef SPICC26XXDMA_WAKEUP_ENABLED
-    SPICC26XXDMA_CallbackFxn wakeupCallbackFxn;/*!< Optional slave mode wake up on CSN assert */
-#endif
+
     /* Scratch buffer of size uint32_t */
     uint16_t               scratchBuf;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2017, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,16 +33,16 @@
  *  ======== SPI.c ========
  */
 
-#include <ti/drivers/SPI.h>
-
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-/* Externs */
-extern const SPI_Config SPI_config[];
+#include <ti/sysbios/family/arm/m3/Hwi.h>
+#include <ti/drivers/SPI.h>
 
-/* Used to check status and initialization */
-static int SPI_count = -1;
+extern const SPI_Config SPI_config[];
+extern const uint_least8_t SPI_count;
 
 /* Default SPI parameters structure */
 const SPI_Params SPI_defaultParams = {
@@ -53,8 +53,10 @@ const SPI_Params SPI_defaultParams = {
     1000000,            /* bitRate */
     8,                  /* dataSize */
     SPI_POL0_PHA0,      /* frameFormat */
-    (uintptr_t) NULL    /* custom */
+    NULL                /* custom */
 };
+
+static bool isInitialized = false;
 
 /*
  *  ======== SPI_close ========
@@ -67,9 +69,9 @@ void SPI_close(SPI_Handle handle)
 /*
  *  ======== SPI_control ========
  */
-int SPI_control(SPI_Handle handle, unsigned int cmd, void *arg)
+int_fast16_t SPI_control(SPI_Handle handle, uint_fast16_t cmd, void *controlArg)
 {
-    return (handle->fxnTablePtr->controlFxn(handle, cmd, arg));
+    return (handle->fxnTablePtr->controlFxn(handle, cmd, controlArg));
 }
 
 /*
@@ -77,34 +79,42 @@ int SPI_control(SPI_Handle handle, unsigned int cmd, void *arg)
  */
 void SPI_init(void)
 {
-    if (SPI_count == -1) {
+    uint_least8_t i;
+    uint_fast32_t key;
+
+    key = Hwi_disable();
+
+    if (!isInitialized) {
+        isInitialized = (bool) true;
+
         /* Call each driver's init function */
-        for (SPI_count = 0; SPI_config[SPI_count].fxnTablePtr != NULL; SPI_count++) {
-            SPI_config[SPI_count].fxnTablePtr->initFxn((SPI_Handle)&(SPI_config[SPI_count]));
+        for (i = 0; i < SPI_count; i++) {
+            SPI_config[i].fxnTablePtr->initFxn((SPI_Handle)&(SPI_config[i]));
         }
     }
+
+    Hwi_restore(key);
 }
 
 /*
  *  ======== SPI_open ========
  */
-SPI_Handle SPI_open(unsigned int index, SPI_Params *params)
+SPI_Handle SPI_open(uint_least8_t index, SPI_Params *params)
 {
-    SPI_Handle handle;
+    SPI_Handle handle = NULL;
 
-    if (index >= SPI_count) {
-        return (NULL);
+    if (isInitialized && (index < SPI_count)) {
+        /* If params are NULL use defaults */
+        if (params == NULL) {
+            params = (SPI_Params *) &SPI_defaultParams;
+        }
+
+        /* Get handle for this driver instance */
+        handle = (SPI_Handle)&(SPI_config[index]);
+        handle = handle->fxnTablePtr->openFxn(handle, params);
     }
 
-    /* If params are NULL use defaults */
-    if (params == NULL) {
-        params = (SPI_Params *) &SPI_defaultParams;
-    }
-
-    /* Get handle for this driver instance */
-    handle = (SPI_Handle)&(SPI_config[index]);
-
-    return (handle->fxnTablePtr->openFxn(handle, params));
+    return (handle);
 }
 
 /*
@@ -113,14 +123,6 @@ SPI_Handle SPI_open(unsigned int index, SPI_Params *params)
 void SPI_Params_init(SPI_Params *params)
 {
     *params = SPI_defaultParams;
-}
-
-/*
- *  ======== SPI_serviceISR ========
- */
-void SPI_serviceISR(SPI_Handle handle)
-{
-    handle->fxnTablePtr->serviceISRFxn(handle);
 }
 
 /*
