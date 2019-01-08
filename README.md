@@ -102,6 +102,23 @@ void LORABUG_initUDMA() {
 ```
 The function should then be called before SPI or ADCBuf init functions in main.
 
+## The SPI Driver
+
+Major changes like
+```C
+Power_setConstraint(PowerCC26XX_NEED_FLASH_IN_IDLE);
+Power_setConstraint(PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING);
+```
+```C
+Power_releaseConstraint(PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING);
+```
+
+```C
+const uint_least8_t SPI_count = CC2650_LAUNCHXL_SPICOUNT;
+```
+
+These changes were merged from `simplelink_cc2640r2_sdk_2_30_00_28`.
+
 # The Power Driver
 The most important
 The new SPI driver depends on the power constraint
