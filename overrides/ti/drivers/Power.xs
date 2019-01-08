@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Texas Instruments Incorporated
+ * Copyright (c) 2015-2016, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,7 +48,7 @@ function module$use()
     BIOS = xdc.module('ti.sysbios.BIOS');
 
     /*
-     *  Warn if trying to add Power to anything other than CC3200, MSP432,
+     *  Warn if trying to add Power to anything other than CC32XX, MSP432,
      *  CC26XX, or CC13XX
      */
     if (!Program.cpu.deviceName.match(/CC32/) &&
@@ -61,8 +61,10 @@ function module$use()
         return;
     }
 
-    /* Swi used in Power policy to disable scheduling */
-    Swi = xdc.useModule('ti.sysbios.knl.Swi');
+    /* Swi is used in Power policy to disable scheduling */
+    if (BIOS.swiEnabled == true) {
+        Swi = xdc.useModule('ti.sysbios.knl.Swi');
+    }
 
     /* Add Idle module and Power idle fxn */
     Idle = xdc.useModule('ti.sysbios.knl.Idle');
@@ -77,14 +79,14 @@ function module$validate()
     Power = xdc.module("ti.drivers.Power");
     BIOS = xdc.module('ti.sysbios.BIOS');
 
-    /* If CC3200, check that Clock timer delegate is compatible with sleep */
+    /* If CC32XX, check that Clock timer delegate is compatible with sleep */
     if (Program.cpu.deviceName.match(/CC32/)) {
 
         if (BIOS.clockEnabled) {
             Clock = xdc.module('ti.sysbios.knl.Clock');
             if (Clock.TimerProxy != null && !Clock.TimerProxy.delegate$.$name.match(
                 /ti.sysbios.family.arm.m3.Timer/)) {
-                Power.$logWarning("The specified Clock.TimerProxy (" + Clock.TimerProxy.delegate$.$name + ") is not compatible with the reference CC3200 sleep policy.", this);
+                Power.$logWarning("The specified Clock.TimerProxy (" + Clock.TimerProxy.delegate$.$name + ") is not compatible with the reference CC32XX sleep policy.", this);
             }
         }
     }

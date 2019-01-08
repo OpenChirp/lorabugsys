@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 /** ============================================================================
  *  @file       Power.h
  *
- *  @brief      Power manager interface
+ *  @brief      Power Manager interface
  *
  *  The Power header file should be included in an application as follows:
  *  @code
@@ -40,14 +40,20 @@
  *  @endcode
  *
  *  # Operation #
- *  The Power manager facilitates the transition of the MCU from active state
- *  to one of the sleep states and vice versa.  It provides drivers the
- *  ability to set and release dependencies on hardware resources and keeps
- *  a reference count on each resource to know when to enable or disable the
- *  peripheral clock to the resource.  It provides drivers the ability to
- *  register a callback function upon a specific power event.  In addition,
- *  drivers and apps can set or release constraints to prevent the MCU from
- *  transitioning into a particular sleep state.
+ *  The Power Manager facilitates the transition of the MCU from active states
+ *  to sleep states and vice versa.  It provides other drivers the
+ *  ability to set and release dependencies on hardware resources, and keeps
+ *  reference counts on each resource to know when to enable or disable the
+ *  resource.  It provides drivers the ability to register callback functions
+ *  to be invoked upon specific power events.  In addition, drivers and
+ *  applications can set or release constraints to prevent the MCU from
+ *  transitioning into specific active or sleep states.
+ *
+ *  <B>The Power Manager APIs and configuration parameters are described here.
+ *  For a detailed description of terms and concepts, and usage by different
+ *  types of software components (peripheral drivers, power policies,
+ *  and applications) please see the
+ *  <a href='../../Power_Management.pdf'>SimpleLink SDK Power Management User's Guide</a>.</B>
  *
  *  ============================================================================
  */
@@ -55,7 +61,9 @@
 #ifndef ti_drivers_Power__include
 #define ti_drivers_Power__include
 
+#include <stdbool.h>
 #include <stdint.h>
+
 #include <ti/drivers/utils/List.h>
 
 #ifdef __cplusplus
@@ -63,26 +71,27 @@ extern "C" {
 #endif
 
 /* Power latency types */
-#define Power_TOTAL                 1   /*!< total latency */
-#define Power_RESUME                2   /*!< resume latency */
+#define Power_TOTAL               (1U)   /*!< total latency */
+#define Power_RESUME              (2U)   /*!< resume latency */
 
 /* Power notify responses */
-#define Power_NOTIFYDONE            0   /*!< OK, notify completed */
-#define Power_NOTIFYERROR           1   /*!< an error occurred during notify */
+#define Power_NOTIFYDONE          (0)   /*!< OK, notify completed */
+#define Power_NOTIFYERROR         (-1)  /*!< an error occurred during notify */
 
 /* Power status */
-#define Power_SOK                   0   /*!< OK, operation succeeded */
-#define Power_EFAIL                 1   /*!< general failure */
-#define Power_EINVALIDPOINTER       2   /*!< invalid pointer */
-#define Power_ECHANGE_NOT_ALLOWED   3   /*!< change is not allowed */
-#define Power_EBUSY                 4   /*!< busy with another transition */
+#define Power_SOK                 (0)    /*!< OK, operation succeeded */
+#define Power_EFAIL               (-1)   /*!< general failure */
+#define Power_EINVALIDINPUT       (-2)   /*!< invalid data value */
+#define Power_EINVALIDPOINTER     (-3)   /*!< invalid pointer */
+#define Power_ECHANGE_NOT_ALLOWED (-4)   /*!< change is not allowed */
+#define Power_EBUSY               (-5)   /*!< busy with another transition */
 
 /* Power transition states */
-#define Power_ACTIVE                1   /*!< normal active state */
-#define Power_ENTERING_SLEEP        2   /*!< entering a sleep state */
-#define Power_EXITING_SLEEP         3   /*!< exiting a sleep state */
-#define Power_ENTERING_SHUTDOWN     4   /*!< entering a shutdown state */
-#define Power_CHANGING_PERF_LEVEL   5   /*!< moving to new performance level */
+#define Power_ACTIVE              (1U)   /*!< normal active state */
+#define Power_ENTERING_SLEEP      (2U)   /*!< entering a sleep state */
+#define Power_EXITING_SLEEP       (3U)   /*!< exiting a sleep state */
+#define Power_ENTERING_SHUTDOWN   (4U)   /*!< entering a shutdown state */
+#define Power_CHANGING_PERF_LEVEL (5U)   /*!< moving to new performance level */
 
 
 /*!
@@ -98,8 +107,8 @@ typedef void (*Power_PolicyFxn)(void);
 /*!
  *  @brief      Power notify function pointer
  */
-typedef int (*Power_NotifyFxn)(unsigned int eventType, uintptr_t eventArg,
-                               uintptr_t clientArg);
+typedef int_fast16_t (*Power_NotifyFxn)(uint_fast16_t eventType,
+     uintptr_t eventArg, uintptr_t clientArg);
 
 /*!
  *  @brief      Power notify object structure.
@@ -109,9 +118,9 @@ typedef int (*Power_NotifyFxn)(unsigned int eventType, uintptr_t eventArg,
  *  Power_registerNotify() will take care initializing the internal elements
  *  appropriately.
  */
-typedef struct Power_NotifyObj {
-    List_Elem link;            /*!< for placing on the notify list */
-    unsigned int eventTypes;    /*!< the event type */
+typedef struct Power_NotifyObj_ {
+    List_Elem link;             /*!< for placing on the notify list */
+    uint_fast16_t eventTypes;   /*!< the event type */
     Power_NotifyFxn notifyFxn;  /*!< notification function */
     uintptr_t clientArg;        /*!< argument provided by client */
 } Power_NotifyObj;
@@ -123,12 +132,14 @@ typedef struct Power_NotifyObj {
  *  Calling this function clears the flag that controls whether the configured
  *  power policy function is invoked on each pass through the Idle loop.
  *  This function call will override both a 'true' setting of the
- *  "enablePolicy" setting in the Power manager configuration object, as well
+ *  "enablePolicy" setting in the Power Manager configuration object, as well
  *  as a previous runtime call to the Power_enablePolicy() function.
+ *
+ *  @return The old value of "enablePolicy".
  *
  *  @sa     Power_enablePolicy
  */
-void Power_disablePolicy(void);
+bool Power_disablePolicy(void);
 
 /*!
  *  @brief  Enable the configured power policy to run when the CPU is idle
@@ -136,7 +147,7 @@ void Power_disablePolicy(void);
  *  Calling this function sets a flag that will cause the configured power
  *  policy function to be invoked on each pass through the Idle loop. This
  *  function call will override both a 'false' setting of the "enablePolicy"
- *  setting in the Power manager configuration object, as well as a previous
+ *  setting in the Power Manager configuration object, as well as a previous
  *  runtime call to the Power_disablePolicy() function.
  *
  *  For some processor families, automatic power transitions can make initial
@@ -155,7 +166,7 @@ void Power_enablePolicy(void);
  *  @brief  Get the constraints that have been declared with Power
  *
  *  This function returns a bitmask indicating the constraints that are
- *  currently declared to the Power manager (via previous calls to
+ *  currently declared to the Power Manager (via previous calls to
  *  Power_setConstraint()).  For each constraint that is currently declared,
  *  the corresponding bit in the bitmask will be set.  For example, if two
  *  clients have independently declared two different constraints, the returned
@@ -173,7 +184,7 @@ void Power_enablePolicy(void);
  *
  *  @sa     Power_setConstraint
  */
-unsigned int Power_getConstraintMask(void);
+uint_fast32_t Power_getConstraintMask(void);
 
 /*!
  *  @brief  Get the current dependency count for a resource
@@ -183,15 +194,16 @@ unsigned int Power_getConstraintMask(void);
  *
  *  Resource identifiers are device specific, and defined in the
  *  device-specific Power include file.  For example, the resources for
- *  CC3200 are defined in PowerCC3200.h.
+ *  CC32XX are defined in PowerCC32XX.h.
  *
  *  @param  resourceId  resource id
  *
- *  @return The number of dependencies declared upon the resource.
+ *  @return The number of dependencies declared for the resource.
+ *          Power_EINVALIDINPUT if the resourceId is invalid.
  *
  *  @sa     Power_setDependency
  */
-unsigned int Power_getDependencyCount(unsigned int resourceId);
+int_fast16_t Power_getDependencyCount(uint_fast16_t resourceId);
 
 /*!
  *  @brief  Get the current performance level
@@ -205,7 +217,7 @@ unsigned int Power_getDependencyCount(unsigned int resourceId);
  *
  *  @sa     Power_setPerformanceLevel
  */
-unsigned int Power_getPerformanceLevel(void);
+uint_fast16_t Power_getPerformanceLevel(void);
 
 /*!
  *  @brief  Get the hardware transition latency for a sleep state
@@ -216,8 +228,8 @@ unsigned int Power_getPerformanceLevel(void);
  *  notifications.
  *
  *  Sleep states are device specific, and defined in the device-specific Power
- *  include file.  For example, the sleep states for CC3200 are defined in
- *  PowerCC3200.h.
+ *  include file.  For example, the sleep states for CC32XX are defined in
+ *  PowerCC32XX.h.
  *
  *  This function is typically called by the power policy function. The latency
  *  is reported in units of microseconds.
@@ -228,20 +240,23 @@ unsigned int Power_getPerformanceLevel(void);
  *
  *  @return The latency value, in units of microseconds.
  */
-uint32_t Power_getTransitionLatency(unsigned int sleepState, unsigned int type);
+uint_fast32_t Power_getTransitionLatency(uint_fast16_t sleepState,
+    uint_fast16_t type);
 
 /*!
- *  @brief  Get the current transition state of the Power manager
+ *  @brief  Get the current transition state of the Power Manager
  *
- *  This function returns the current transition state for the Power manager.
+ *  This function returns the current transition state for the Power Manager.
  *  For example, when no transitions are in progress, a status of Power_ACTIVE
  *  is returned.  Power_ENTERING_SLEEP is returned during the transition to
- *  sleep, before sleep has occurred. And Power_EXITING_SLEEP will be returned
+ *  sleep, before sleep has occurred. Power_EXITING_SLEEP is returned
  *  after wakeup, as the device is being transitioned back to Power_ACTIVE.
+ *  And Power_CHANGING_PERF_LEVEL is returned when a change is being made
+ *  to the performance level.
  *
- *  @return The current Power manager transition state.
+ *  @return The current Power Manager transition state.
  */
-unsigned int Power_getTransitionState(void);
+uint_fast16_t Power_getTransitionState(void);
 
 /*!
  *  @brief  Power function to be added to the application idle loop
@@ -258,12 +273,14 @@ void Power_idleFunc(void);
 /*!
  *  @brief  Power initialization function
  *
- *  This function initializes Power manager internal state.  It must be called
+ *  This function initializes Power Manager internal state.  It must be called
  *  prior to any other Power API.  This function is normally called as part
  *  of TI-RTOS board initialization, for example, from within the
  *  \<board name\>_initGeneral() function.
+ *
+ *  @return Power_SOK
  */
-void Power_init(void);
+int_fast16_t Power_init(void);
 
 /*!
  *  @brief  Register a function to be called upon a specific power event
@@ -320,12 +337,13 @@ void Power_init(void);
  *
  *  @param  clientArg       client-specified argument to pass with notification
  *
- *  @return  Power_SOK
+ *  @return  Power_SOK on success.
+ *           Power_EINVALIDPOINTER if either pNotifyObj or notifyFxn are NULL.
  *
  *  @sa     Power_unregisterNotify
  */
-unsigned int Power_registerNotify(Power_NotifyObj *pNotifyObj,
-                                  unsigned int eventTypes,
+int_fast16_t Power_registerNotify(Power_NotifyObj *pNotifyObj,
+                                  uint_fast16_t eventTypes,
                                   Power_NotifyFxn notifyFxn,
                                   uintptr_t clientArg);
 
@@ -353,9 +371,18 @@ unsigned int Power_registerNotify(Power_NotifyObj *pNotifyObj,
  *
  *  @param  constraintId      constraint id
  *
+ *  @return <b>CC26XX/CC13XX only</b>: Power_SOK. To minimize code size
+ *          asserts are used internally to check that the constraintId is valid,
+ *          and that the constraint count is not already zero;
+ *          the function always returns Power_SOK.
+ *
+ *  @return <b>All other devices</b>: Power_SOK on success,
+ *          Power_EINVALIDINPUT if the constraintId is invalid, and Power_EFAIL
+ *          if the constraint count is already zero.
+ *
  *  @sa     Power_setConstraint
  */
-void Power_releaseConstraint(unsigned int constraintId);
+int_fast16_t Power_releaseConstraint(uint_fast16_t constraintId);
 
 /*!
  *  @brief  Release a previously declared dependency
@@ -365,18 +392,27 @@ void Power_releaseConstraint(unsigned int constraintId);
  *
  *  Resource identifiers are device specific, and defined in the
  *  device-specific Power include file.  For example, the resources for
- *  CC3200 are defined in PowerCC3200.h.
+ *  CC32XX are defined in PowerCC32XX.h.
  *
  *  @param  resourceId      resource id
  *
+ *  @return <b>CC26XX/CC13XX only</b>: Power_SOK. To minimize code size
+ *          asserts are used internally to check that the resourceId is valid,
+ *          and that the resource reference count is not already zero;
+ *          the function always returns Power_SOK.
+ *
+ *  @return <b>All other devices</b>: Power_SOK on success,
+ *          Power_EINVALIDINPUT if the resourceId is invalid, and Power_EFAIL
+ *          if the resource reference count is already zero.
+ *
  *  @sa     Power_setDependency
  */
-void Power_releaseDependency(unsigned int resourceId);
+int_fast16_t Power_releaseDependency(uint_fast16_t resourceId);
 
 /*!
  *  @brief  Declare an operational constraint
  *
- *  Before taking certain actions, the Power manager checks to see if the
+ *  Before taking certain actions, the Power Manager checks to see if the
  *  requested action would conflict with a client-declared constraint. If the
  *  action does conflict, Power will not proceed with the request.  This is the
  *  function that allows clients to declare their constraints with Power.
@@ -390,38 +426,52 @@ void Power_releaseDependency(unsigned int resourceId);
  *
  *  @param  constraintId      constraint id
  *
+ *  @return <b>CC26XX/CC13XX only</b>: Power_SOK. To minimize code size an
+ *          assert is used internally to check that the constraintId is valid;
+ *          the function always returns Power_SOK.
+ *
+ *  @return <b>All other devices</b>: Power_SOK on success,
+ *          Power_EINVALIDINPUT if the constraintId is invalid.
+ *
  *  @sa     Power_releaseConstraint
  */
-void Power_setConstraint(unsigned int constraintId);
+int_fast16_t Power_setConstraint(uint_fast16_t constraintId);
 
 /*!
  *  @brief  Declare a dependency upon a resource
  *
  *  This function declares a dependency upon a resource. For example, if a
  *  UART driver needs a specific UART peripheral, it uses this function to
- *  declare this to the Power manager.  If the resource had been inactive,
+ *  declare this to the Power Manager.  If the resource had been inactive,
  *  then Power will activate the peripheral during this function call.
  *
  *  What is needed to make a peripheral resource 'active' will vary by device
  *  family. For some devices this may be a simple enable of a clock to the
  *  specified peripheral.  For others it may also require a power on of a
- *  power domain.  In either case, the Power manager will take care of these
+ *  power domain.  In either case, the Power Manager will take care of these
  *  details, and will also implement reference counting for resources and their
  *  interdependencies.  For example, if multiple UART peripherals reside in
- *  a shared serial power domain, the Power manager will power up the serial
+ *  a shared serial power domain, the Power Manager will power up the serial
  *  domain when it is first needed, and then automatically power the domain off
  *  later, when all related dependencies for the relevant peripherals are
  *  released.
  *
  *  Resource identifiers are device specific, and defined in the
  *  device-specific Power include file.  For example, the resources for
- *  CC3200 are defined in PowerCC3200.h.
+ *  CC32XX are defined in PowerCC32XX.h.
  *
  *  @param  resourceId      resource id
  *
+ *  @return <b>CC26XX/CC13XX only</b>: Power_SOK. To minimize code size an
+ *          assert is used internally to check that the resourceId is valid;
+ *          the function always returns Power_SOK.
+ *
+ *  @return <b>All other devices</b>: Power_SOK on success,
+ *          Power_EINVALIDINPUT if the reseourceId is invalid.
+ *
  *  @sa     Power_releaseDependency
  */
-void Power_setDependency(unsigned int resourceId);
+int_fast16_t Power_setDependency(uint_fast16_t resourceId);
 
 /*!
  *  @brief  Set the MCU performance level
@@ -446,18 +496,21 @@ void Power_setDependency(unsigned int resourceId);
  *
  *  @param  level      the new performance level
  *
- *  @return Power_SOK on success.  Power_EFAIL if: performance scaling is not
- *      supported, or if the scaling routines encountered an error during
- *      initialization, or if the specified performance level is out of range
- *      of valid levels. Power_EBUSY is returned if the Power manager is
- *      already busy with another transition, or if a single constraint that
- *      locks any performance level changes has been declared.
- *      Power_ECHANGE_NOT_ALLOWED is returned if the requested level has been
- *      explicitly prohibited by a level-specific constraint.
+ *  @return Power_SOK on success.
+ *          Power_EINVALIDINPUT if the specified performance level is out of
+ *          range of valid levels.
+ *          Power_EBUSY if another transition is already in progress, or if
+ *          a single constraint is set to prohibit any change to the
+ *          performance level.
+ *          Power_ECHANGE_NOT_ALLOWED if a level-specific constraint prohibits
+ *          a change to the requested level.
+ *          Power_EFAIL if performance scaling is not supported, if an
+ *          error occurred during initialization, or if an error occurred
+ *          during client notifications.
  *
  *  @sa     Power_getPerformanceLevel
  */
-unsigned int Power_setPerformanceLevel(unsigned int level);
+int_fast16_t Power_setPerformanceLevel(uint_fast16_t level);
 
 /*!
  *  @brief  Set a new Power policy
@@ -475,9 +528,9 @@ void Power_setPolicy(Power_PolicyFxn policy);
  *  Before the actual transition is initiated, notifications will be sent to
  *  any clients who've registered (with Power_registerNotify()) for an
  *  'entering shutdown' event.  The event name is device specific, and defined
- *  in the device-specific Power include file.  For example, for CC3200, the
- *  event is "PowerCC3200_ENTERING_SHUTDOWN", which is defined in
- *  PowerCC3200.h.  Once notifications have been completed, the device shutdown
+ *  in the device-specific Power include file.  For example, for CC32XX, the
+ *  event is "PowerCC32XX_ENTERING_SHUTDOWN", which is defined in
+ *  PowerCC32XX.h.  Once notifications have been completed, the device shutdown
  *  will commence.
  *
  *  If the device is successfully transitioned to shutdown, this function
@@ -495,8 +548,8 @@ void Power_setPolicy(Power_PolicyFxn policy);
  *  be ignored.)  If the specified shutdownTime is less than the total
  *  shutdown latency for the device, then shutdownTime will be ignored.  The
  *  shutdown latency for the device can be found in the device-specific Power
- *  include file.  For example, for the CC3200, this latency is defined in
- *  PowerCC3200.h, as "PowerCC3200_TOTALTIMESHUTDOWN".)
+ *  include file.  For example, for the CC32XX, this latency is defined in
+ *  PowerCC32XX.h, as "PowerCC32XX_TOTALTIMESHUTDOWN".)
  *
  *  @param  shutdownState  the device-specific shutdown state
  *
@@ -504,12 +557,13 @@ void Power_setPolicy(Power_PolicyFxn policy);
  *                         the device in the shutdown state; this parameter
  *                         is not supported on all device families
  *
- *  @return An error status if the transition did not occur:
- *       Power_ECHANGE_NOT_ALLOWED if the transition is prohibited by a
- *       constraint; Power_EBUSY if the Power manager is already busy with
- *       another transition.
+ *  @return Power_ECHANGE_NOT_ALLOWED if a constraint is prohibiting shutdown.
+ *          Power_EFAIL if an error occurred during client notifications.
+ *          Power_EINVALIDINPUT if the shutdownState is invalid.
+ *          Power_EBUSY if another transition is already in progress.
  */
-unsigned int Power_shutdown(unsigned int shutdownState, uint32_t shutdownTime);
+int_fast16_t Power_shutdown(uint_fast16_t shutdownState,
+    uint_fast32_t shutdownTime);
 
 /*!
  *  @brief  Transition the device into a sleep state
@@ -525,12 +579,13 @@ unsigned int Power_shutdown(unsigned int shutdownState, uint32_t shutdownTime);
  *
  *  @param  sleepState      the sleep state
  *
- *  @return A status code indicating success or failure: Power_SOK if the
- *       device was put to sleep and then awoken; Power_EFAIL if a failure
- *       occurred during client notifications; or Power_EBUSY if the Power
- *       manager is already busy with another transition.
+ *  @return Power_SOK on success, the device has slept and is awake again.
+ *          Power_EFAIL if an error occurred during client notifications, or
+ *          if a general failure occurred.
+ *          Power_EINVALIDINPUT if the sleepState is invalid.
+ *          Power_EBUSY if another transition is already in progress.
  */
-unsigned int Power_sleep(unsigned int sleepState);
+int_fast16_t Power_sleep(uint_fast16_t sleepState);
 
 /*!
  *  @brief  Unregister previously registered notifications

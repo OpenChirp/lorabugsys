@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,7 +22,7 @@
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQueueNTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
  * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
  * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
@@ -30,13 +30,15 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /*
- *  ======== PowerCC26XX_tirtos_policy.c ========
+ *  ======== PowerCC26XX_tirtos.c ========
  */
 
 #include <stdbool.h>
 #include <ti/drivers/Power.h>
 #include <ti/drivers/power/PowerCC26XX.h>
+
 #include <ti/sysbios/knl/Clock.h>
+#include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/family/arm/m3/Hwi.h>
 
 /* driverlib header files */
@@ -52,15 +54,20 @@
 #define NOTIFY_LATENCY     ( 1000 / Clock_tickPeriod )
 
 extern PowerCC26XX_ModuleState PowerCC26XX_module;
+extern const PowerCC26XX_Config PowerCC26XX_config;
+
+UInt PowerCC26XX_taskKey;
+UInt PowerCC26XX_swiKey;
 
 /*
  *  ======== PowerCC26XX_standbyPolicy ========
  */
 void PowerCC26XX_standbyPolicy(void)
 {
-    bool justIdle = TRUE;
+    bool justIdle = true;
     uint32_t constraints;
-    uint32_t ticks, time;
+    uint32_t ticks;
+    uint32_t time;
 
     /* disable interrupts */
     CPUcpsid();
@@ -73,8 +80,8 @@ void PowerCC26XX_standbyPolicy(void)
 
     /* do quick check to see if only WFI allowed; if yes, do it now */
     if ((constraints &
-        ((1 << PowerCC26XX_SB_DISALLOW) | (1 << PowerCC26XX_IDLE_PD_DISALLOW))) ==
-        ((1 << PowerCC26XX_SB_DISALLOW) | (1 << PowerCC26XX_IDLE_PD_DISALLOW))) {
+        ((1 << PowerCC26XX_DISALLOW_STANDBY) | (1 << PowerCC26XX_DISALLOW_IDLE))) ==
+        ((1 << PowerCC26XX_DISALLOW_STANDBY) | (1 << PowerCC26XX_DISALLOW_IDLE))) {
         PRCMSleep();
     }
     /*
@@ -82,7 +89,7 @@ void PowerCC26XX_standbyPolicy(void)
      */
     else {
         /* check if we are allowed to go to standby */
-        if ((constraints & (1 << PowerCC26XX_SB_DISALLOW)) == 0) {
+        if ((constraints & (1 << PowerCC26XX_DISALLOW_STANDBY)) == 0) {
             /*
              * Check how many ticks until the next scheduled wakeup.  A value of
              * zero indicates a wakeup will occur as the current Clock tick
@@ -96,18 +103,24 @@ void PowerCC26XX_standbyPolicy(void)
             time = ticks * Clock_tickPeriod;
 
             /* check if can go to STANDBY */
-            if (time > Power_getTransitionLatency(PowerCC26XX_STANDBY,
-                Power_TOTAL)) {
-
+            if (time > Power_getTransitionLatency(PowerCC26XX_STANDBY, Power_TOTAL)) {
                 /* schedule the wakeup event */
                 ticks -= PowerCC26XX_WAKEDELAYSTANDBY / Clock_tickPeriod;
-                Clock_setTimeout(Clock_handle(&PowerCC26XX_module.clockObj), ticks);
-                Clock_start(Clock_handle(&PowerCC26XX_module.clockObj));
+
+                if (PowerCC26XX_config.enableMaxStandbyDuration) {
+                    /* Schedule an early wakeup if requested. */
+                    if (ticks > PowerCC26XX_config.maxStandbyDuration) {
+                        ticks = PowerCC26XX_config.maxStandbyDuration;
+                    }
+                }
+
+                Clock_setTimeout(Clock_handle((Clock_Struct *)&PowerCC26XX_module.clockObj), ticks);
+                Clock_start(Clock_handle((Clock_Struct *)&PowerCC26XX_module.clockObj));
 
                 /* go to standby mode */
                 Power_sleep(PowerCC26XX_STANDBY);
-                Clock_stop(Clock_handle(&PowerCC26XX_module.clockObj));
-                justIdle = FALSE;
+                Clock_stop(Clock_handle((Clock_Struct *)&PowerCC26XX_module.clockObj));
+                justIdle = false;
             }
         }
 
@@ -121,7 +134,7 @@ void PowerCC26XX_standbyPolicy(void)
              * NOTE: if radio driver is active it must force SYSBUS enable to
              * allow access to the bus and SRAM
              */
-            if ((constraints & (1 << PowerCC26XX_IDLE_PD_DISALLOW)) == 0) {
+            if ((constraints & (1 << PowerCC26XX_DISALLOW_IDLE)) == 0) {
                 uint32_t modeVIMS;
                 /* 1. Get the current VIMS mode */
                 do {
@@ -161,6 +174,29 @@ void PowerCC26XX_standbyPolicy(void)
 }
 
 /*
+ *  ======== PowerCC26XX_schedulerDisable ========
+ */
+void PowerCC26XX_schedulerDisable()
+{
+    PowerCC26XX_taskKey = Task_disable();
+    if (Hwi_swiDisable != NULL) {
+        PowerCC26XX_swiKey = Hwi_swiDisable();
+    }
+}
+
+/*
+ *  ======== PowerCC26XX_schedulerRestore ========
+ */
+void PowerCC26XX_schedulerRestore()
+{
+    if (Hwi_swiRestoreHwi != NULL) {
+        Hwi_swiRestoreHwi(PowerCC26XX_swiKey);
+    }
+    Task_restore(PowerCC26XX_taskKey);
+}
+
+
+/*
  *  ======== Timer_disableCC26xx ========
  *  This is a support function for the ti.sysbios.family.arm.lm4.Timer module.
  *  It allows the Timer module in the kernel to cooperate with the Power
@@ -193,7 +229,7 @@ void ti_sysbios_family_arm_lm4_Timer_disableCC26xx__I(int32_t id)
     }
 
     /* release the disallow standby constraint when the GP timer is disabled */
-    Power_releaseConstraint(PowerCC26XX_SB_DISALLOW);
+    Power_releaseConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
     Hwi_restore(key);
 }
@@ -231,7 +267,7 @@ void ti_sysbios_family_arm_lm4_Timer_enableCC26xx__I(int32_t id)
     }
 
     /* declare the disallow standby constraint while GP timer is in use */
-    Power_setConstraint(PowerCC26XX_SB_DISALLOW);
+    Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
     Hwi_restore(key);
 }

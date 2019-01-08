@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,7 +22,7 @@
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQueueNTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
  * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
  * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
@@ -33,8 +33,8 @@
  *  ======== PowerCC26XX.c ========
  */
 
-#include <xdc/std.h>
 #include <stdbool.h>
+
 #include <xdc/runtime/Assert.h>
 #include <ti/sysbios/family/arm/m3/Hwi.h>
 #include <ti/sysbios/knl/Clock.h>
@@ -75,9 +75,10 @@ static unsigned int configureXOSCHF(unsigned int action);
 static unsigned int nopResourceHandler(unsigned int action);
 static unsigned int configureRFCoreClocks(unsigned int action);
 static void switchXOSCHFclockFunc(uintptr_t arg0);
-static void disableLFClockQualifiers(uintptr_t arg);
+static void lfClockReadyCallback(uintptr_t arg);
+static void disableLfClkQualifiersEnableClkLoss();
 static void emptyClockFunc(uintptr_t arg);
-static unsigned int notify(uint32_t eventType);
+static int_fast16_t notify(uint_fast16_t eventType);
 
 /* RCOSC calibration functions functions */
 extern void PowerCC26XX_doCalibrate(void);
@@ -92,11 +93,11 @@ extern const PowerCC26XX_Config PowerCC26XX_config;
 PowerCC26XX_ModuleState PowerCC26XX_module = {
     .notifyList = { NULL },         /* list of registered notifications    */
     .constraintMask = 0,            /* the constraint mask                 */
-    .clockObj = { NULL },           /* Clock object for scheduling wakeups */
-    .xoscClockObj = { NULL },       /* Clock object for XOSC_HF switching  */
-    .lfClockObj = { NULL },         /* Clock object for LF clock check     */
-    .calClockStruct = { NULL },     /* Clock object for RCOSC calibration  */
-    .hwiStruct = { NULL },          /* hwi object for calibration          */
+    .clockObj = { 0 },              /* Clock object for scheduling wakeups */
+    .xoscClockObj = { 0 },          /* Clock object for XOSC_HF switching  */
+    .lfClockObj = { 0 },            /* Clock object for LF clock check     */
+    .calClockStruct = { 0 },        /* Clock object for RCOSC calibration  */
+    .hwiStruct = { 0 },             /* hwi object for calibration          */
     .nDeltaFreqCurr = 0,            /* RCOSC calibration variable          */
     .nCtrimCurr = 0,                /* RCOSC calibration variable          */
     .nCtrimFractCurr = 0,           /* RCOSC calibration variable          */
@@ -107,15 +108,18 @@ PowerCC26XX_ModuleState PowerCC26XX_module = {
     .nDeltaFreqNew = 0,             /* RCOSC calibration variable          */
     .bRefine = false,               /* RCOSC calibration variable          */
     .state = Power_ACTIVE,          /* current transition state            */
-    .xoscPending = FALSE,           /* is XOSC_HF activation in progress?  */
-    .calLF = FALSE,                 /* calibrate RCOSC_LF?                 */
+    .xoscPending = false,           /* is XOSC_HF activation in progress?  */
+    .calLF = false,                 /* calibrate RCOSC_LF?                 */
     .hwiState = 0,                  /* calibration AUX ISR state           */
-    .busyCal = FALSE,               /* already busy calibrating            */
+    .busyCal = false,               /* already busy calibrating            */
     .calStep = 1,                   /* current calibration step            */
-    .firstLF = TRUE,                /* is this first LF calibration?       */
-    .enablePolicy = FALSE,          /* default value is FALSE              */
-    .initialized = FALSE,           /* whether Power_init has been called  */
-    .constraintCounts = { 0, 0, 0, 0, 0 },
+    .firstLF = true,                /* is this first LF calibration?       */
+    .enablePolicy = false,          /* default value is false              */
+    .initialized = false,           /* whether Power_init has been called  */
+#if defined(DeviceFamily_CC26X0R2)
+    .emulatorAttached = false,      /* emulator attached during boot       */
+#endif
+    .constraintCounts = { 0, 0, 0, 0, 0, 0, 0 },
     .resourceCounts = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     .resourceHandlers = {
       configureRFCoreClocks,
@@ -127,44 +131,25 @@ PowerCC26XX_ModuleState PowerCC26XX_module = {
 
 /* resource database */
 const PowerCC26XX_ResourceRecord resourceDB[PowerCC26XX_NUMRESOURCES] = {
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_TIMER0 },/* PERIPH_GPT0 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_TIMER1 },/* PERIPH_GPT1 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_TIMER2 },/* PERIPH_GPT2 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_TIMER3 },/* PERIPH_GPT3 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_SSI0 },  /* PERIPH_SSI0 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_SSI1 },  /* PERIPH_SSI1 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_UART0 }, /* PERIPH_UART0 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_I2C0 },  /* PERIPH_I2C0 */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_TRNG },  /* PERIPH_TRNG */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_GPIO },  /* PERIPH_GPIO */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_DOMAIN_SYSBUS,
-    PRCM_PERIPH_UDMA }, /* PERIPH_UDMA */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_CRYPTO },/* PERIPH_CRYPTO */
-    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PowerCC26XX_NOPARENT,
-    PRCM_PERIPH_I2S },   /* PERIPH_I2S */
-    { PowerCC26XX_SPECIAL | PowerCC26XX_DOMAIN_RFCORE, PowerCC26XX_NOPARENT,
-    0 },    /* PERIPH_RFCORE */
-    { PowerCC26XX_SPECIAL | PowerCC26XX_NOPARENT, PowerCC26XX_NOPARENT,
-    1 },    /* XOSC_HF */
-    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PowerCC26XX_NOPARENT,
-    PRCM_DOMAIN_PERIPH },/* DOMAIN_PERIPH */
-    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PowerCC26XX_NOPARENT,
-    PRCM_DOMAIN_SERIAL },/* DOMAIN_SERIAL */
-    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PowerCC26XX_NOPARENT,
-    PRCM_DOMAIN_RFCORE },/* DOMAIN_RFCORE */
-    { PowerCC26XX_SPECIAL | PowerCC26XX_NOPARENT, PowerCC26XX_NOPARENT,
-    2 }     /* DOMAIN_SYSBUS */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER0 },    /* PERIPH_GPT0 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER1 },    /* PERIPH_GPT1 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER2 },    /* PERIPH_GPT2 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER3 },    /* PERIPH_GPT3 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_SSI0 },      /* PERIPH_SSI0 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_SSI1 },      /* PERIPH_SSI1 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_UART0 },     /* PERIPH_UART0 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_I2C0 },      /* PERIPH_I2C0 */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TRNG },      /* PERIPH_TRNG */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_GPIO },      /* PERIPH_GPIO */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_UDMA },      /* PERIPH_UDMA */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_CRYPTO },    /* PERIPH_CRYPTO */
+    { PowerCC26XX_PERIPH  | PowerCC26XX_PERIPH_UDMA, PRCM_PERIPH_I2S },         /* PERIPH_I2S */
+    { PowerCC26XX_SPECIAL | PowerCC26XX_DOMAIN_RFCORE, 0 },                     /* PERIPH_RFCORE */
+    { PowerCC26XX_SPECIAL | PowerCC26XX_NOPARENT, 1 },                          /* XOSC_HF */
+    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PRCM_DOMAIN_PERIPH },         /* DOMAIN_PERIPH */
+    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PRCM_DOMAIN_SERIAL },         /* DOMAIN_SERIAL */
+    { PowerCC26XX_DOMAIN  | PowerCC26XX_NOPARENT, PRCM_DOMAIN_RFCORE },         /* DOMAIN_RFCORE */
+    { PowerCC26XX_SPECIAL | PowerCC26XX_NOPARENT, 2 }                           /* DOMAIN_SYSBUS */
 };
 
 
@@ -174,9 +159,12 @@ const PowerCC26XX_ResourceRecord resourceDB[PowerCC26XX_NUMRESOURCES] = {
  *  ======== Power_disablePolicy ========
  *  Do not run the configured policy
  */
-void Power_disablePolicy(void)
+bool Power_disablePolicy(void)
 {
-    PowerCC26XX_module.enablePolicy = FALSE;
+    bool enablePolicy = PowerCC26XX_module.enablePolicy;
+    PowerCC26XX_module.enablePolicy = false;
+
+    return (enablePolicy);
 }
 
 /*
@@ -185,7 +173,7 @@ void Power_disablePolicy(void)
  */
 void Power_enablePolicy(void)
 {
-    PowerCC26XX_module.enablePolicy = TRUE;
+    PowerCC26XX_module.enablePolicy = true;
 }
 
 /*
@@ -193,7 +181,7 @@ void Power_enablePolicy(void)
  *  Get a bitmask indicating the constraints that have been registered with
  *  Power.
  */
-unsigned int Power_getConstraintMask(void)
+uint_fast32_t Power_getConstraintMask(void)
 {
     return (PowerCC26XX_module.constraintMask);
 }
@@ -202,12 +190,12 @@ unsigned int Power_getConstraintMask(void)
  *  ======== Power_getDependencyCount ========
  *  Get the count of dependencies that are currently declared upon a resource.
  */
-unsigned int Power_getDependencyCount(unsigned int resourceId)
+int_fast16_t Power_getDependencyCount(uint_fast16_t resourceId)
 {
     /* Assert resourceId is valid */
     Assert_isTrue(resourceId < PowerCC26XX_NUMRESOURCES, NULL);
 
-    return (PowerCC26XX_module.resourceCounts[resourceId]);
+    return ((int_fast16_t)PowerCC26XX_module.resourceCounts[resourceId]);
 }
 
 /*
@@ -215,8 +203,8 @@ unsigned int Power_getDependencyCount(unsigned int resourceId)
  *  Get the transition latency for a sleep state.  The latency is reported
  *  in units of microseconds.
  */
-uint32_t Power_getTransitionLatency(unsigned int sleepState,
-    unsigned int type)
+uint_fast32_t Power_getTransitionLatency(uint_fast16_t sleepState,
+    uint_fast16_t type)
 {
     uint32_t latency = 0;
 
@@ -238,7 +226,7 @@ uint32_t Power_getTransitionLatency(unsigned int sleepState,
  *  ======== Power_getTransitionState ========
  *  Get the current sleep transition state.
  */
-unsigned int Power_getTransitionState(void)
+uint_fast16_t Power_getTransitionState(void)
 {
     return (PowerCC26XX_module.state);
 }
@@ -261,19 +249,25 @@ void Power_idleFunc()
 /*
  *  ======== Power_init ========
  */
-void Power_init()
+int_fast16_t Power_init()
 {
     Clock_Params clockParams;
     uint32_t ccfgLfClkSrc;
     uint32_t timeout;
 
-    /* if function has already been called, just return */
+    /* if this function has already been called, just return */
     if (PowerCC26XX_module.initialized) {
-        return;
+        return (Power_SOK);
     }
 
+#if defined(DeviceFamily_CC26X0R2)
+    /* check to see if the JTAG_PD is on, meaning the emulator was attached during boot and */
+    /* that the user is in an active debug session */
+    PowerCC26XX_module.emulatorAttached = (HWREG(AON_WUC_BASE + AON_WUC_O_PWRSTAT) & AON_WUC_PWRSTAT_JTAG_PD_ON) == AON_WUC_PWRSTAT_JTAG_PD_ON;
+#endif
+
     /* set module state field 'initialized' to true */
-    PowerCC26XX_module.initialized = TRUE;
+    PowerCC26XX_module.initialized = true;
 
     /* set the module state enablePolicy field */
     PowerCC26XX_module.enablePolicy = PowerCC26XX_config.enablePolicy;
@@ -285,7 +279,7 @@ void Power_init()
     /* initiated and started by the power policy */
     Clock_Params_init(&clockParams);
     clockParams.period = 0;
-    clockParams.startFlag = FALSE;
+    clockParams.startFlag = false;
     clockParams.arg = 0;
     Clock_construct(&PowerCC26XX_module.clockObj, &emptyClockFunc,
         0, &clockParams);
@@ -297,7 +291,7 @@ void Power_init()
 
     /* construct the Clock object for disabling LF clock quailifiers */
     /* one shot, auto start, first expires at 100 msec */
-    Clock_construct(&PowerCC26XX_module.lfClockObj, &disableLFClockQualifiers,
+    Clock_construct(&PowerCC26XX_module.lfClockObj, &lfClockReadyCallback,
         0, &clockParams);
 
     (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_SETUP_CALIBRATE);
@@ -316,14 +310,14 @@ void Power_init()
     }
 
     /*
-     * if LF source is RCOSC_LF or XOSC_LF: assert the SB_DISALLOW constraint
+     * if LF source is RCOSC_LF or XOSC_LF: assert DISALLOW_STANDBY constraint
      * and start a timeout to check for activation
      */
     if ((ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_RCOSC_LF) ||
         (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_LF)) {
 
         /* disallow STANDBY pending LF clock quailifier disabling */
-        Power_setConstraint(PowerCC26XX_SB_DISALLOW);
+        Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
         /* determine timeout */
         if (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_RCOSC_LF) {
@@ -341,29 +335,44 @@ void Power_init()
 
     /*
      * else, if the LF clock source is external, can disable clock qualifiers
-     * now; no need to assert SB_DISALLOW or start the Clock object
+     * now; no need to assert DISALLOW_STANDBY or start the Clock object
      */
     else if (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_EXTERNAL_LF) {
 
-        /* yes, disable the LF clock qualifiers */
-        DDI16BitfieldWrite(
-            AUX_DDI0_OSC_BASE,
-            DDI_0_OSC_O_CTL0,
-            DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M|
-                DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
-            DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S,
-            0x3);
-
-        /* enable clock loss detection */
-        OSCClockLossEventEnable();
+        /* Disable clock qualifiers and enable clock loss */
+        disableLfClkQualifiersEnableClkLoss();
     }
+    /*
+     * else, user has requested LF to be derived from XOSC_HF
+     */
+    else if(ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_HF_DLF)
+    {
+        /* disallow standby */
+        Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
-
+        /* wait for the XOSC_HF to power up if it's not ready.. */
+        if(OSCClockSourceGet(OSC_SRC_CLK_LF) == OSC_XOSC_HF)
+        {
+            /* XOSC_HF is ready. Simply disable clock qualifiers and enable clock loss */
+            disableLfClkQualifiersEnableClkLoss(NULL);
+        }
+        else
+        {
+            /* XOSC_HF is not ready yet, schedule clock to check again later */
+            timeout = PowerCC26XX_INITIALWAITXOSC_HF / Clock_tickPeriod;
+            /* start the Clock object */
+            Clock_setTimeout(Clock_handle(&PowerCC26XX_module.lfClockObj),
+                (timeout / Clock_tickPeriod));
+            Clock_start(Clock_handle(&PowerCC26XX_module.lfClockObj));
+        }
+    }
 
     /* if VIMS RAM is configured as GPRAM: set retention constraint */
     if (!CCFGRead_DIS_GPRAM()) {
-        Power_setConstraint(PowerCC26XX_SB_VIMS_CACHE_RETAIN);
+        Power_setConstraint(PowerCC26XX_RETAIN_VIMS_CACHE_IN_STANDBY);
     }
+
+    return (Power_SOK);
 }
 
 /*
@@ -371,30 +380,34 @@ void Power_init()
  *  Register a function to be called on a specific power event.
  *
  */
-unsigned int Power_registerNotify(Power_NotifyObj * pNotifyObj,
-    unsigned int eventTypes, Power_NotifyFxn notifyFxn, uintptr_t clientArg)
+int_fast16_t Power_registerNotify(Power_NotifyObj * pNotifyObj,
+    uint_fast16_t eventTypes, Power_NotifyFxn notifyFxn, uintptr_t clientArg)
 {
+    int_fast16_t status = Power_SOK;
+
     /* check for NULL pointers  */
     if ((pNotifyObj == NULL) || (notifyFxn == NULL)) {
-        return (Power_EINVALIDPOINTER);
+        status = Power_EINVALIDPOINTER;
     }
 
-    /* fill in notify object elements */
-    pNotifyObj->eventTypes = eventTypes;
-    pNotifyObj->notifyFxn = notifyFxn;
-    pNotifyObj->clientArg = clientArg;
+    else {
+        /* fill in notify object elements */
+        pNotifyObj->eventTypes = eventTypes;
+        pNotifyObj->notifyFxn = notifyFxn;
+        pNotifyObj->clientArg = clientArg;
 
-    /* place notify object on event notification queue */
-    List_put(&PowerCC26XX_module.notifyList, (List_Elem*)pNotifyObj);
+        /* place notify object on event notification queue */
+        List_put(&PowerCC26XX_module.notifyList, (List_Elem*)pNotifyObj);
+    }
 
-    return (Power_SOK);
+    return (status);
 }
 
 /*
  *  ======== Power_releaseConstraint ========
  *  Release a previously declared constraint.
  */
-void Power_releaseConstraint(unsigned int constraintId)
+int_fast16_t Power_releaseConstraint(uint_fast16_t constraintId)
 {
     unsigned int key;
     uint8_t count;
@@ -420,13 +433,15 @@ void Power_releaseConstraint(unsigned int constraintId)
     }
 
     Hwi_restore(key);
+
+    return (Power_SOK);
 }
 
 /*
  *  ======== Power_releaseDependency ========
  *  Release a previously declared dependency.
  */
-void Power_releaseDependency(unsigned int resourceId)
+int_fast16_t Power_releaseDependency(uint_fast16_t resourceId)
 {
     uint8_t parent;
     uint8_t count;
@@ -485,28 +500,22 @@ void Power_releaseDependency(unsigned int resourceId)
         parent = resourceDB[resourceId].flags & PowerCC26XX_PARENTMASK;
 
         /* if 1st parent, make recursive call to release that dependency */
-        if (parent != PowerCC26XX_NOPARENT) {
-            Power_releaseDependency(parent);
-        }
-
-        /* check for a second parent */
-        parent = resourceDB[resourceId].flags2 & PowerCC26XX_PARENTMASK;
-
-        /* if 2nd parent, make recursive call to release that dependency */
-        if (parent != PowerCC26XX_NOPARENT) {
+        if (parent < PowerCC26XX_NUMRESOURCES) {
             Power_releaseDependency(parent);
         }
     }
 
     /* re-enable interrupts */
     Hwi_restore(key);
+
+    return (Power_SOK);
 }
 
 /*
  *  ======== Power_setConstraint ========
  *  Declare an operational constraint.
  */
-void Power_setConstraint(unsigned int constraintId)
+int_fast16_t Power_setConstraint(uint_fast16_t constraintId)
 {
     unsigned int key;
 
@@ -524,13 +533,15 @@ void Power_setConstraint(unsigned int constraintId)
 
    /* re-enable interrupts */
     Hwi_restore(key);
+
+    return (Power_SOK);
 }
 
 /*
  *  ======== Power_setDependency ========
  *  Declare a dependency upon a resource.
  */
-void Power_setDependency(unsigned int resourceId)
+int_fast16_t Power_setDependency(uint_fast16_t resourceId)
 {
     uint8_t parent;
     uint8_t count;
@@ -554,15 +565,7 @@ void Power_setDependency(unsigned int resourceId)
         parent = resourceDB[resourceId].flags & PowerCC26XX_PARENTMASK;
 
         /* if first parent, make recursive call to set that dependency */
-        if (parent != PowerCC26XX_NOPARENT) {
-            Power_setDependency(parent);
-        }
-
-        /* check for a second parent */
-        parent = resourceDB[resourceId].flags2 & PowerCC26XX_PARENTMASK;
-
-        /* if second parent, make recursive call to set that dependency */
-        if (parent != PowerCC26XX_NOPARENT) {
+        if (parent < PowerCC26XX_NUMRESOURCES) {
             Power_setDependency(parent);
         }
 
@@ -595,6 +598,8 @@ void Power_setDependency(unsigned int resourceId)
 
     /* re-enable interrupts */
     Hwi_restore(key);
+
+    return (Power_SOK);
 }
 
 /*
@@ -609,22 +614,23 @@ void Power_setPolicy(Power_PolicyFxn policy)
 /*
  *  ======== Power_shutdown ========
  */
-unsigned int Power_shutdown(unsigned int shutdownState,
-                            uint32_t shutdownTime)
+int_fast16_t Power_shutdown(uint_fast16_t shutdownState,
+    uint_fast32_t shutdownTime)
 {
-    unsigned int status = Power_EFAIL;
+    int_fast16_t status = Power_EFAIL;
     unsigned int constraints;
     unsigned int hwiKey;
 
-    /* next make sure Power is not still busy with a previous transition */
+    /* disable interrupts */
     hwiKey = Hwi_disable();
 
-    /* make sure shutdown request doesn't violate a constraint */
+    /* check if there is a constraint to prohibit shutdown */
     constraints = Power_getConstraintMask();
-
-    if (constraints & (1 << PowerCC26XX_SD_DISALLOW)) {
+    if (constraints & (1 << PowerCC26XX_DISALLOW_SHUTDOWN)) {
         status = Power_ECHANGE_NOT_ALLOWED;
     }
+
+    /* OK to shutdown ... */
     else if (PowerCC26XX_module.state == Power_ACTIVE) {
         /* set new transition state to entering shutdown */
         PowerCC26XX_module.state = Power_ENTERING_SHUTDOWN;
@@ -633,7 +639,7 @@ unsigned int Power_shutdown(unsigned int shutdownState,
         status = notify(PowerCC26XX_ENTERING_SHUTDOWN);
 
         /* check for any error */
-        if (status != Power_NOTIFYDONE) {
+        if (status != Power_SOK) {
             PowerCC26XX_module.state = Power_ACTIVE;
             Hwi_restore(hwiKey);
             return (status);
@@ -641,13 +647,39 @@ unsigned int Power_shutdown(unsigned int shutdownState,
 
         /* now proceed with shutdown sequence ... */
 
+        /* If the JTAG_PD is on, make sure that the DUT reboots without
+         * stopping for halt-in-boot when it enters shutdown. */
+#if defined(DeviceFamily_CC26X0R2)
+        uint32_t aonSysctrlResetctl;
+
+        if((HWREG(AON_WUC_BASE + AON_WUC_O_PWRSTAT) & AON_WUC_PWRSTAT_JTAG_PD_ON) &&
+           (!PowerCC26XX_module.emulatorAttached)) {
+            /* set BOOT_DET = b10.
+             * The next time the device enters shutdown the
+             * device will start booting immediately because the JTAG_PD is already on.
+             * However since since BOOT_DET == b10, the boot code will run not wait
+             * for a GPIO interrupt, but rather run to completion and branch to the
+             * flash image with the JTAG_PD turned off.
+             */
+            aonSysctrlResetctl = HWREG( AON_SYSCTL_BASE + AON_SYSCTL_O_RESETCTL ) &
+                ~( AON_SYSCTL_RESETCTL_BOOT_DET_1_CLR_M | AON_SYSCTL_RESETCTL_BOOT_DET_0_CLR_M |
+                  AON_SYSCTL_RESETCTL_BOOT_DET_1_SET_M | AON_SYSCTL_RESETCTL_BOOT_DET_0_SET_M );
+            /* To get BOOT_DET = b10, set BOOT_DET_1_SET and BOOT_DET_0_CLR*/
+            HWREG(AON_SYSCTL_BASE + AON_SYSCTL_O_RESETCTL) = aonSysctrlResetctl |
+                (AON_SYSCTL_RESETCTL_BOOT_DET_0_CLR | AON_SYSCTL_RESETCTL_BOOT_DET_1_SET);
+        }
+#endif
+
         /* 1. Switch HF, MF, and LF clocks to source from RCOSC_HF */
         if (OSCClockSourceGet(OSC_SRC_CLK_HF) != OSC_RCOSC_HF) {
-            OSCClockSourceSet(OSC_SRC_CLK_HF | OSC_SRC_CLK_MF,
-                OSC_RCOSC_HF);
+            /* 1.1. Source HF and MF from RCOSC_HF */
+            OSCClockSourceSet(OSC_SRC_CLK_HF | OSC_SRC_CLK_MF, OSC_RCOSC_HF);
             while (!OSCHfSourceReady());
             OSCHfSourceSwitch();
         }
+        /* 1.2. Source LF from RCOSC_LF */
+        OSCClockSourceSet(OSC_SRC_CLK_LF, OSC_RCOSC_LF);
+        while (OSCClockSourceGet(OSC_SRC_CLK_LF) != OSC_RCOSC_LF);
 
         /* 2. Make sure DMA and CRYTO clocks are off in deep-sleep */
         PRCMPeripheralDeepSleepDisable(PRCM_PERIPH_CRYPTO);
@@ -702,6 +734,7 @@ unsigned int Power_shutdown(unsigned int shutdownState,
     else {
         status = Power_EBUSY;
     }
+
     /* NOTE: if shutdown succeeded, should never get here */
 
     /* return failure status */
@@ -717,29 +750,39 @@ unsigned int Power_shutdown(unsigned int shutdownState,
 /*
  *  ======== Power_sleep ========
  */
-unsigned int Power_sleep(unsigned int sleepState)
+int_fast16_t Power_sleep(uint_fast16_t sleepState)
 {
-    unsigned int status = Power_SOK;
-    unsigned int xosc_hf_active = FALSE;
-    uint32_t postEventLate;
+    int_fast16_t status = Power_SOK;
+    int_fast16_t notifyStatus = Power_SOK;
+    int_fast16_t lateNotifyStatus = Power_SOK;
+    unsigned int xosc_hf_active = false;
+    uint_fast16_t postEventLate;
     uint32_t poweredDomains = 0;
-    uint32_t preEvent;
-    uint32_t postEvent;
+    uint_fast16_t preEvent;
+    uint_fast16_t postEvent;
     unsigned int constraints;
-    bool retainCache = FALSE;
+    bool retainCache = false;
     uint32_t modeVIMS;
-    unsigned int taskKey;
     unsigned int swiKey;
+
+#if defined(DeviceFamily_CC26X0R2)
+    /* has JTAG_PD been turned AFTER boot due to TCK noise? */
+    if((HWREG(AON_WUC_BASE + AON_WUC_O_PWRSTAT) & AON_WUC_PWRSTAT_JTAG_PD_ON) && (!PowerCC26XX_module.emulatorAttached))
+    {
+        /* notify all subscribers */
+        notify(PowerCC26XX_JTAG_PD_TURNED_ON);
+    }
+#endif
 
     /* first validate the sleep code */
     if (sleepState != PowerCC26XX_STANDBY) {
-        status = Power_EFAIL;
+        status = Power_EINVALIDINPUT;
     }
 
-    if (status == Power_SOK) {
+    else {
 
+        /* check to make sure Power is not busy with another transition */
         if (PowerCC26XX_module.state == Power_ACTIVE) {
-
             /* set transition state to entering sleep */
             PowerCC26XX_module.state = Power_ENTERING_SLEEP;
         }
@@ -755,15 +798,15 @@ unsigned int Power_sleep(unsigned int sleepState)
             postEventLate = PowerCC26XX_AWAKE_STANDBY_LATE;
 
             /* disable Task scheduling; allow Swis and Hwis for notifications */
-            taskKey = Task_disable();
+            PowerCC26XX_schedulerDisable();
 
             /* signal all clients registered for pre-sleep notification */
             status = notify(preEvent);
 
             /* check for any error */
-            if (status != Power_NOTIFYDONE) {
+            if (status != Power_SOK) {
                 PowerCC26XX_module.state = Power_ACTIVE;
-                Task_restore(taskKey);          /* re-enable scheduler */
+                PowerCC26XX_schedulerRestore();
                 return (status);
             }
 
@@ -775,7 +818,7 @@ unsigned int Power_sleep(unsigned int sleepState)
 
             /* 2. If XOSC_HF is active, force it off */
             if(OSCClockSourceGet(OSC_SRC_CLK_HF) == OSC_XOSC_HF) {
-                xosc_hf_active = TRUE;
+                xosc_hf_active = true;
                 configureXOSCHF(PowerCC26XX_DISABLE);
             }
 
@@ -818,12 +861,12 @@ unsigned int Power_sleep(unsigned int sleepState)
 
             /* query constraints to determine if cache should be retained */
             constraints = Power_getConstraintMask();
-            if (constraints & (1 << PowerCC26XX_SB_VIMS_CACHE_RETAIN)) {
-                retainCache = TRUE;
+            if (constraints & (1 << PowerCC26XX_RETAIN_VIMS_CACHE_IN_STANDBY)) {
+                retainCache = true;
             }
 
             /* 10. If don't want VIMS retention in standby, disable it now... */
-            if (retainCache == FALSE) {
+            if (retainCache == false) {
 
                 /* 10.1 Get the current VIMS mode */
                 do {
@@ -851,7 +894,7 @@ unsigned int Power_sleep(unsigned int sleepState)
             PRCMDeepSleep();
 
             /* 14. If didn't retain VIMS in standby, re-enable retention now */
-            if (retainCache == FALSE) {
+            if (retainCache == false) {
 
                 /* 14.1 If previously in a cache mode, restore the mode now */
                 if (modeVIMS == VIMS_MODE_ENABLED) {
@@ -893,48 +936,59 @@ unsigned int Power_sleep(unsigned int sleepState)
                 ;
             }
 
+            /* 22. Wait for the RTC shadow values to be updated so that
+             * the early notification callbacks can read out valid RTC values
+             */
+            SysCtrlAonSync();
+
             /*
-             * 22. Signal clients registered for early post-sleep notification;
+             * 23. Signal clients registered for early post-sleep notification;
              * this should be used to initialize any timing critical or IO
              * dependent hardware
              */
-            status = notify(postEvent);
+            notifyStatus = notify(postEvent);
 
-            /* 23. Disable IO freeze and ensure RTC shadow value is updated */
+            /* 24. Disable IO freeze and ensure RTC shadow value is updated */
             AONIOCFreezeDisable();
             SysCtrlAonSync();
 
-            /* 24. Wait for AUX to power up */
+            /* 25. Wait for AUX to power up */
             while(!(AONWUCPowerStatusGet() & AONWUC_AUX_POWER_ON)) {};
 
-            /* 25. If XOSC_HF was forced off above, initiate switch back */
-            if (xosc_hf_active == TRUE) {
+            /* 26. If XOSC_HF was forced off above, initiate switch back */
+            if (xosc_hf_active == true) {
                 configureXOSCHF(PowerCC26XX_ENABLE);
             }
 
-            /* 26. Re-enable interrupts */
+            /* 27. Re-enable interrupts */
             CPUcpsie();
 
             /*
-             * 27. Signal all clients registered for late post-sleep
+             * 28. Signal all clients registered for late post-sleep
              * notification
              */
-            status = notify(postEventLate);
+            lateNotifyStatus = notify(postEventLate);
 
             /*
-             * 28. Now clear the transition state before re-enabling
+             * 29. Now clear the transition state before re-enabling
              * scheduler
              */
             PowerCC26XX_module.state = Power_ACTIVE;
 
-            /* 29. Re-enable Swi scheduling */
+            /* 30. Re-enable Swi scheduling */
             Swi_restore(swiKey);
 
-            /* 30. Adjust recharge parameters */
-            SysCtrlAdjustRechargeAfterPowerDown();
+            /* 31. Adjust recharge parameters */
+            SysCtrlAdjustRechargeAfterPowerDown(PowerCC26XX_config.vddrRechargeMargin);
 
             /* re-enable Task scheduling */
-            Task_restore(taskKey);
+            PowerCC26XX_schedulerRestore();
+
+            /* if there was a notification error, set return status */
+            if ((notifyStatus != Power_SOK) ||
+                (lateNotifyStatus != Power_SOK)) {
+                status = Power_EFAIL;
+            }
         }
     }
 
@@ -968,7 +1022,7 @@ void Power_unregisterNotify(Power_NotifyObj * pNotifyObj)
  */
 bool PowerCC26XX_calibrate(unsigned int arg)
 {
-    bool retVal = FALSE;
+    bool retVal = false;
     Clock_Params clockParams;
 
     switch (arg) {
@@ -981,7 +1035,7 @@ bool PowerCC26XX_calibrate(unsigned int arg)
              */
             Clock_Params_init(&clockParams);
             clockParams.period = 0;
-            clockParams.startFlag = FALSE;
+            clockParams.startFlag = false;
             clockParams.arg = 0;
             Clock_construct(&PowerCC26XX_module.calClockStruct,
                 &PowerCC26XX_RCOSC_clockFunc, 1, &clockParams);
@@ -1048,10 +1102,10 @@ bool PowerCC26XX_injectCalibration(void)
     if ((*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_INITIATE_CALIBRATE)) {
         /* here if AUX SMPH was available, start calibration now ... */
         (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_DO_CALIBRATE);
-        return (TRUE);
+        return (true);
     }
 
-    return (FALSE);
+    return (false);
 }
 
 /*
@@ -1060,7 +1114,7 @@ bool PowerCC26XX_injectCalibration(void)
  */
 bool PowerCC26XX_isStableXOSC_HF(void)
 {
-    bool ready = TRUE;
+    bool ready = true;
     unsigned int key;
 
     key = Hwi_disable();
@@ -1078,20 +1132,20 @@ bool PowerCC26XX_isStableXOSC_HF(void)
 /*
  *  ======== PowerCC26XX_switchXOSC_HF ========
  *  Switch to enable XOSC_HF.
+ *  May only be called when using the PowerCC26XX_SWITCH_XOSC_HF_MANUALLY
+ *  constraint.
+ *  May only be called after ensuring the XOSC_HF is stable by calling
+ *  PowerCC26XX_isStableXOSC_HF().
  */
 void PowerCC26XX_switchXOSC_HF(void)
 {
-    unsigned int key;
-
-    key = Hwi_disable();
-
-    /* only switch source if there is a pending change */
-    if (PowerCC26XX_module.xoscPending == TRUE) {
-        OSCHF_AttemptToSwitchToXosc();
-        PowerCC26XX_module.xoscPending = FALSE;
-    }
-
-    Hwi_restore(key);
+    /* This function is just a veneer to call the static callback function for
+     * the XOSC_HF clock. This way, if the switching does fail because a constraint
+     * stopped it from switching, a clock will be scheduled into the future to try
+     * again. This could happen if there is an ongoing operation from another bus
+     * master that reads from flash such as SPI or AES DMA operations.
+     */
+    switchXOSCHFclockFunc((uintptr_t) NULL);
 }
 
 /* * * * * * * * * * * internal and support functions * * * * * * * * * * */
@@ -1105,10 +1159,26 @@ static void emptyClockFunc(uintptr_t arg)
 }
 
 /*
- *  ======== disableLFClockQualifiers ========
- *  Clock function used for delayed disable of LF clock qualifiers.
+ *  ======== disableLfClkQualifiersEnableClkLoss ========
+ *  Function used to disable LF clock qualifiers and enable clock loss
  */
-static void disableLFClockQualifiers(uintptr_t arg)
+static void disableLfClkQualifiersEnableClkLoss()
+{
+    /* Disable the LF clock qualifiers */
+    DDI16BitfieldWrite(AUX_DDI0_OSC_BASE, DDI_0_OSC_O_CTL0,
+                       DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M |
+                       DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
+                       DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S, 0x3);
+
+    /* Enable clock loss detection */
+    OSCClockLossEventEnable();
+}
+
+/*
+ *  ======== lfClockReadyCallback ========
+ *  Clock function callback used to check if the LF clock is ready
+ */
+static void lfClockReadyCallback(uintptr_t arg)
 {
     uint32_t ccfgLfClkSrc;
     uint32_t sourceLF;
@@ -1120,25 +1190,26 @@ static void disableLFClockQualifiers(uintptr_t arg)
     /* is LF source either RCOSC_LF or XOSC_LF yet? */
     if ((sourceLF == OSC_RCOSC_LF) || (sourceLF == OSC_XOSC_LF)) {
 
-        /* yes, disable the LF clock qualifiers */
-        DDI16BitfieldWrite(
-            AUX_DDI0_OSC_BASE,
-            DDI_0_OSC_O_CTL0,
-            DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M|
-                DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
-            DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S,
-            0x3
-        );
-
-        /* enable clock loss detection */
-        OSCClockLossEventEnable();
+        /* Disable clock qualifiers and enable clock loss */
+        disableLfClkQualifiersEnableClkLoss();
 
         /* now finish by releasing the standby disallow constraint */
-        Power_releaseConstraint(PowerCC26XX_SB_DISALLOW);
+        Power_releaseConstraint(PowerCC26XX_DISALLOW_STANDBY);
+    }
+    /* is LF source XOSC_HF yet? */
+    else if(sourceLF == OSC_XOSC_HF)
+    {
+        /* Disable clock qualifiers and enable clock loss */
+        disableLfClkQualifiersEnableClkLoss();
+
+        /* Keep PowerCC26XX_DISALLOW_STANDBY set, not allowed to enter standby
+         * when LF clock is sourced from from XOSC_HF
+         */
     }
 
-    /* not yet, LF still derived from HF, restart clock to check back later */
+    /* not yet, LF still derived from RCOSC_HF, restart clock to check back later */
     else {
+
         /* read the LF clock source from CCFG */
         ccfgLfClkSrc = CCFGRead_SCLK_LF_OPTION();
 
@@ -1146,8 +1217,12 @@ static void disableLFClockQualifiers(uintptr_t arg)
         if (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_RCOSC_LF) {
             timeout = PowerCC26XX_RETRYWAITRCOSC_LF;
         }
-        else {
+        else if(ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_LF){
             timeout = PowerCC26XX_RETRYWAITXOSC_LF;
+        }
+        else {
+            /* ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_HF_DLF */
+            timeout = PowerCC26XX_RETRYWAITXOSC_HF;
         }
         /* retrigger LF Clock to fire again */
         Clock_setTimeout(Clock_handle(&PowerCC26XX_module.lfClockObj),
@@ -1170,12 +1245,12 @@ static unsigned int nopResourceHandler(unsigned int action)
  *  Send notifications to registered clients.
  *  Note: Task scheduling is disabled when this function is called.
  */
-static unsigned int notify(uint32_t eventType)
+static int_fast16_t notify(uint_fast16_t eventType)
 {
-    unsigned int status = Power_NOTIFYDONE;
-    List_Elem *elem;
+    int_fast16_t notifyStatus;
     Power_NotifyFxn notifyFxn;
     uintptr_t clientArg;
+    List_Elem *elem;
 
     /* if queue is empty, return immediately */
     if (!List_empty(&PowerCC26XX_module.notifyList)) {
@@ -1190,11 +1265,11 @@ static unsigned int notify(uint32_t eventType)
                 clientArg = ((Power_NotifyObj *)elem)->clientArg;
 
                 /* call the client's notification function */
-                status = (unsigned int)(*(Power_NotifyFxn)notifyFxn)(
+                notifyStatus = (int_fast16_t)(*(Power_NotifyFxn)notifyFxn)(
                     eventType, 0, clientArg);
 
                 /* if client declared error stop all further notifications */
-                if (status == Power_NOTIFYERROR) {
+                if (notifyStatus != Power_NOTIFYDONE) {
                     return (Power_EFAIL);
                 }
             }
@@ -1205,7 +1280,7 @@ static unsigned int notify(uint32_t eventType)
         } while (elem != NULL);
     }
 
-    return (status);
+    return (Power_SOK);
 }
 
 /*
@@ -1237,7 +1312,7 @@ static void switchXOSCHFclockFunc(uintptr_t arg0)
     key = Hwi_disable();
 
     /* if pending switch has already been made, just send out notifications */
-    if (PowerCC26XX_module.xoscPending == FALSE) {
+    if (PowerCC26XX_module.xoscPending == false) {
 
         /* initiate RCOSC calibration */
         readyToCal = (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_INITIATE_CALIBRATE);
@@ -1246,15 +1321,16 @@ static void switchXOSCHFclockFunc(uintptr_t arg0)
         notify(PowerCC26XX_XOSC_HF_SWITCHED);
 
         /* if ready to start first cal measurment, do it now */
-        if (readyToCal == TRUE) {
+        if (readyToCal == true) {
             (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_DO_CALIBRATE);
         }
     }
 
-    /* else, if HF ready to switch, do it now ... */
-    else if (OSCHF_AttemptToSwitchToXosc()) {
+    /* else, if HF ready to switch and we are allowed to, do it now ... */
+    else if (!(Power_getConstraintMask() & (1 << PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING)) && OSCHfSourceReady()) {
+        OSCHF_AttemptToSwitchToXosc();
 
-        PowerCC26XX_module.xoscPending = FALSE;
+        PowerCC26XX_module.xoscPending = false;
 
         /* initiate RCOSC calibration */
         readyToCal = (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_INITIATE_CALIBRATE);
@@ -1263,7 +1339,7 @@ static void switchXOSCHFclockFunc(uintptr_t arg0)
         notify(PowerCC26XX_XOSC_HF_SWITCHED);
 
         /* if ready to start first cal measurment, do it now */
-        if (readyToCal == TRUE) {
+        if (readyToCal == true) {
             (*(PowerCC26XX_config.calibrateFxn))(PowerCC26XX_DO_CALIBRATE);
         }
     }
@@ -1292,13 +1368,19 @@ static unsigned int configureXOSCHF(unsigned int action)
 {
     uint32_t timeout;
 
-    if (action == PowerCC26XX_ENABLE) {
-        if (OSCClockSourceGet(OSC_SRC_CLK_HF) != OSC_XOSC_HF) {
-            OSCHF_TurnOnXosc();
+    if (action == PowerCC26XX_ENABLE && OSCClockSourceGet(OSC_SRC_CLK_HF) != OSC_XOSC_HF) {
+        OSCHF_TurnOnXosc();
 
-            PowerCC26XX_module.xoscPending = TRUE;
+        PowerCC26XX_module.xoscPending = true;
 
-            /* calculate wait timeout in units of ticks */
+        /* Unless it is disallowed, estimate the required stabilisation
+         * time and start a clock.
+         * When the clock times out, the callback will try and switch to
+         * the XOSC_HF. If the XOSC_HF is not ready yet, the callback
+         * will start a new clock to try again.
+         */
+        if (!(Power_getConstraintMask() & (1 << PowerCC26XX_SWITCH_XOSC_HF_MANUALLY))) {
+             /* calculate wait timeout in units of ticks */
             timeout = PowerCC26XX_INITIALWAITXOSC_HF / Clock_tickPeriod;
             if (timeout == 0) {
                 timeout = 1;   /* wait at least 1 tick */

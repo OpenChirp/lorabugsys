@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Texas Instruments Incorporated
+ * Copyright (c) 2015-2018, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,11 +34,14 @@
  */
 
 #include <stdbool.h>
+
 #include <xdc/runtime/System.h>
-#include <ti/drivers/Power.h>
-#include <ti/drivers/power/PowerCC26XX.h>
+
 #include <ti/sysbios/knl/Clock.h>
 #include <ti/sysbios/family/arm/m3/Hwi.h>
+
+#include <ti/drivers/Power.h>
+#include <ti/drivers/power/PowerCC26XX.h>
 
 #include <driverlib/aon_batmon.h>
 #include <driverlib/ddi.h>
@@ -106,7 +109,7 @@ volatile unsigned int gotSEM = 0;
 volatile unsigned int calLFi = 0;
 volatile unsigned int calHF1i = 0;
 volatile unsigned int calHF2i = 0;
-volatile bool doneCal = FALSE;
+volatile bool doneCal = false;
 unsigned int tdcResult_LF = 0;
 unsigned int tdcResult_HF1 = 0;
 unsigned int tdcResult_HF2 = 0;
@@ -132,29 +135,29 @@ extern const PowerCC26XX_Config PowerCC26XX_config;
 bool PowerCC26XX_initiateCalibration()
 {
     unsigned int hwiKey;
-    bool busy = FALSE;
+    bool busy = false;
     bool status;
     bool gotSem;
 
-    if ((PowerCC26XX_module.calLF == FALSE) &&
-        (PowerCC26XX_config.calibrateRCOSC_HF == FALSE)) {
-        return (FALSE);
+    if ((PowerCC26XX_module.calLF == false) &&
+        (PowerCC26XX_config.calibrateRCOSC_HF == false)) {
+        return (false);
     }
 
     /* make sure calibration is not already in progress */
     hwiKey = Hwi_disable();
 
-    if (PowerCC26XX_module.busyCal == FALSE) {
-        PowerCC26XX_module.busyCal = TRUE;
+    if (PowerCC26XX_module.busyCal == false) {
+        PowerCC26XX_module.busyCal = true;
     }
     else {
-        busy = TRUE;
+        busy = true;
     }
 
     Hwi_restore(hwiKey);
 
-    if (busy == TRUE) {
-        return (FALSE);
+    if (busy == true) {
+        return (false);
     }
 
 #if INSTRUMENT
@@ -162,11 +165,11 @@ bool PowerCC26XX_initiateCalibration()
     calLFi = 0;
     calHF1i = 0;
     calHF2i = 0;
-    doneCal = FALSE;
+    doneCal = false;
 #endif
 
     /* set contraint to prohibit standby during calibration sequence */
-    Power_setConstraint(PowerCC26XX_SB_DISALLOW);
+    Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
     /* set dependency to keep XOSC_HF active during calibration sequence */
     Power_setDependency(PowerCC26XX_XOSC_HF);
@@ -175,9 +178,9 @@ bool PowerCC26XX_initiateCalibration()
     gotSem = getTdcSemaphore();
 
     /* if didn't acquire semaphore, must wait for autotake ISR */
-    if (gotSem == FALSE) {
+    if (gotSem == false) {
         PowerCC26XX_module.hwiState = WAIT_SMPH;
-        status = FALSE;  /* FALSE: don't do anything else until acquire SMPH */
+        status = false;  /* false: don't do anything else until acquire SMPH */
     }
 
     /* else, semaphore acquired, OK to proceed with first measurement */
@@ -185,7 +188,7 @@ bool PowerCC26XX_initiateCalibration()
 #if INSTRUMENT
         gotSEM = 1;
 #endif
-        status = TRUE;   /* TRUE: OK to start first measurement */
+        status = true;   /* true: OK to start first measurement */
     }
 
     return (status);
@@ -211,11 +214,6 @@ void PowerCC26XX_auxISR(uintptr_t arg)
     * must use dedicated interrupt lines or go through AON combined.
     */
     HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_COMBEVTOMCUMASK) = 0;
-
-    /* clear the interrupt source, can only be AMPH_AUTOTAKE_DONE or TDC_DONE */
-    HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) =
-        AUX_EVCTL_COMBEVTOMCUMASK_SMPH_AUTOTAKE_DONE |
-        AUX_EVCTL_COMBEVTOMCUMASK_TDC_DONE;
 
     /* ****** state = WAIT_SMPH: arrive here if just took the SMPH ****** */
     if (PowerCC26XX_module.hwiState == WAIT_SMPH) {
@@ -511,16 +509,16 @@ void PowerCC26XX_doCalibrate(void)
 
             /* release the power down constraints and XOSC_HF dependency */
             Power_releaseDependency(PowerCC26XX_XOSC_HF);
-            Power_releaseConstraint(PowerCC26XX_SB_DISALLOW);
+            Power_releaseConstraint(PowerCC26XX_DISALLOW_STANDBY);
 
             /* set next state */
             PowerCC26XX_module.calStep = STEP_TDC_INIT_1;
 
 #if INSTRUMENT
-            doneCal = TRUE;
+            doneCal = true;
             calHF2i = 1;
 #endif
-            PowerCC26XX_module.busyCal = FALSE;
+            PowerCC26XX_module.busyCal = false;
             break;
 
         default:
@@ -590,8 +588,12 @@ static bool getTdcSemaphore()
 
     /* if acquired SMPH: done */
     if (own != 0) {
-        return (TRUE);
+        return (true);
     }
+
+    /* clear the interrupt source, can only be cleared when we don't have semaphore */
+    HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) =
+        AUX_EVCTL_EVTOMCUFLAGSCLR_SMPH_AUTOTAKE_DONE;
 
     /*
      * else, did not acquire the semaphore, enable SMPH_AUTOTAKE_DONE event
@@ -603,7 +605,7 @@ static bool getTdcSemaphore()
     /* start AUTOTAKE of semaphore for TDC access */
     HWREG(AUX_SMPH_BASE + AUX_SMPH_O_AUTOTAKE) = AUX_TDC_SEMAPHORE_NUMBER;
 
-    return (FALSE);
+    return (false);
 }
 
 /*
@@ -612,11 +614,12 @@ static bool getTdcSemaphore()
  */
 static void updateSubSecInc(uint32_t tdcResult)
 {
-    uint32_t newSubSecInc;
+    int32_t newSubSecInc;
     uint32_t oldSubSecInc;
     uint32_t subSecInc;
     uint32_t ccfgModeConfReg;
     int32_t hposcOffset;
+    int32_t hposcOffsetInv;
 
     /*
      * Calculate the new SUBSECINC
@@ -631,8 +634,10 @@ static void updateSubSecInc(uint32_t tdcResult)
     if(((ccfgModeConfReg & CCFG_MODE_CONF_XOSC_FREQ_M ) >> CCFG_MODE_CONF_XOSC_FREQ_S) == 1) {
         /* Get the HPOSC relative offset at this temperature */
         hposcOffset = OSC_HPOSCRelativeFrequencyOffsetGet(AONBatMonTemperatureGetDegC());
+        /* Convert to RF core format */
+        hposcOffsetInv = OSC_HPOSCRelativeFrequencyOffsetToRFCoreFormatConvert(hposcOffset);
         /* Adjust SUBSECINC */
-        newSubSecInc += ((newSubSecInc * hposcOffset) >> 22);
+        newSubSecInc += (((newSubSecInc >> 4) * (hposcOffsetInv >> 3)) >> 15);
     }
 
     /* Apply filter, but not for first calibration */
@@ -640,7 +645,7 @@ static void updateSubSecInc(uint32_t tdcResult)
         /* Don't apply filter first time, to converge faster */
         subSecInc = newSubSecInc;
         /* No longer first measurement */
-        PowerCC26XX_module.firstLF = FALSE;
+        PowerCC26XX_module.firstLF = false;
     }
     else {
         /* Read old SUBSECINC value */
