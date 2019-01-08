@@ -65,7 +65,7 @@
   `ti/tirtos_cc13xx_cc26xx_2_21_01_08/examples/GNU/CC2650_LAUNCHXL`.
 
 # The `overrides` directory
-This directory holds upgraded/modified core libraries.
+This directory holds upgraded/fixed core libraries and drivers for the CC2650.
 
 ## ADCBuf and ADC libraries
 These libraries were carefully upgraded/merged to use the new code from from `simplelink_cc2640r2_sdk_2_20_00_49` on Nov 29, 2018 by Craig.
