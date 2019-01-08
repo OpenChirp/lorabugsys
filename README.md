@@ -102,6 +102,37 @@ void LORABUG_initUDMA() {
 ```
 The function should then be called before SPI or ADCBuf init functions in main.
 
+# The Power Driver
+The most important
+The new SPI driver depends on the power constraint
+`PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING`, which was only implemented
+in the new Power driver. For this reason, I had to upgrade the Power driver
+also.
+
+From the updated [PowerCC26XX.h](overrides/ti/drivers/power/PowerCC26XX.h):
+```C
++#define PowerCC26XX_DISALLOW_XOSC_HF_SWITCHING 6
++/*!< Constraint: Prevent power driver from switching to XOSC_HF when the crystal is
++ *   ready. The RTOS clock will be rescheduled to try again in the future.
++ *   This is a workaround to prevent the flash from being accessed by a bus master
++ *   other than the CPU while switching to XOSC_HF. This would cause a bus stall.
++ *   This functionality is only implemented on CC26X0, CC26X0R2, and CC13X0 as the
++ *   bug was fixed in hardware on later devices.
+  */
+```
+The silicon bug being reference here is in the CC2650 Errata.
+
+These changes were merged from `simplelink_cc2640r2_sdk_2_30_00_28`.
+
+# sys_ctl.[ch]
+This had to updated because the new Power driver required a different
+function interface to `SysCtrlAdjustRechargeAfterPowerDown`.
+Another interesting change to this library is the correction to the
+`SysCtrlResetSourceGet` function, which returns the last reset source.
+I believe this is to compensate for a silicon bug which causes a issue
+for a particular type of reset and further results in misreported reset source.
+
+These changes were merged from `simplelink_cc2640r2_sdk_2_30_00_28`.
 
 [TIRTOSDriversDoc]: http://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/tirtos/2_21_01_08/exports/tirtos_full_2_21_01_08/products/tidrivers_full_2_21_01_01/docs/doxygen/html/index.html
 [SYSBIOSGuideDoc]: http://www.ti.com/lit/pdf/spruex3
