@@ -46,6 +46,7 @@ void uart_printf(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
 void uart_vprintf(const char *format, va_list args)
     __attribute__ ((format (printf, 1, 0)));
+void uart_flush(void);
 char *uart_readline();
 void uart_hexdump(uint8_t *data, size_t size);
 void uart_readline_setcallback(void (*callback)(const char *buf, size_t size));
@@ -84,6 +85,7 @@ void setBtnCallback(void (*callback)(void));
 void allprintf(const char *format, ...)
         __attribute__ ((format (printf, 1, 2)));
 void allhexdump(uint8_t *data, size_t size);
+void allflush();
 
 #ifdef __cplusplus
 }

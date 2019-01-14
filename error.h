@@ -47,11 +47,13 @@ bool TimestampDiffNs(uint64_t *nanoseconds, Types_Timestamp64 *before, Types_Tim
 
 #define debugprintf(fmt, args...) allprintf(fmt, ## args)
 #define debughexdump(data, size)  allhexdump(data, size)
+#define debugflush()              allflush()
 
 #else
 
 #define debugprintf(fmt, ...)    do { } while(0)
 #define debughexdump(data, size) do { } while(0)
+#define debugflush()             do { } while(0)
 
 #endif
 

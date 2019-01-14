@@ -382,6 +382,12 @@ void allhexdump(uint8_t *data, size_t size)
     phexdump(allprintf, data, size);
 }
 
+void allflush()
+{
+    uart_flush();
+    System_flush();
+}
+
 
 void hardreset()
 {

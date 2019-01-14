@@ -258,6 +258,10 @@ void uart_printf(const char *format, ...)
     va_end(args);
 }
 
+void uart_flush() {
+    //TODO: Implement flush for UART
+}
+
 void uart_readline_setcallback(void (*callback)(const char *buf, size_t size)) {
     readlineCallback = callback;
 }
